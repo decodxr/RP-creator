@@ -19,7 +19,7 @@ from pydantic import BaseModel,Field
 from .db import Database,uid,dumps
 from .engine import Engine
 from .ai import AIError
-from .models import AISettings,CampaignInput,LocationInput,NPCInput,ChatInput,MemoryInput
+from .models import AISettings,CampaignInput,LocationInput,NPCInput,ChatInput,MemoryInput,CharacterPromptInput,NPCWithMemoriesInput
 from .memory import visible,decode,save_memory,invalidate_dependents
 from .world import event
 
@@ -159,6 +159,18 @@ def create_app(root=None,testing=False):
                 db.execute('INSERT INTO locations VALUES (?,?,?,?)',(lid,cid,data.name,data.description))
                 db.execute('UPDATE campaigns SET version=version+1 WHERE id=?',(cid,))
             engine.vault.export(cid); return {'id':lid}
+
+    @app.post('/api/campaigns/{cid}/npcs/generate')
+    async def generate_npc(cid:str,data:CharacterPromptInput):
+        engine.world.require(cid)
+        return await engine.generate_npc_draft(cid,data.prompt)
+
+    @app.post('/api/campaigns/{cid}/npcs/with-memories')
+    async def add_npc_with_memories(cid:str,data:NPCWithMemoriesInput):
+        async with engine.lock(cid):
+            nid=engine.add_npc_with_memories(cid,data)
+            engine.vault.export(cid)
+            return {'id':nid,'memories':len(data.memories)}
 
     @app.post('/api/campaigns/{cid}/npcs')
     async def add_npc(cid:str,data:NPCInput):
