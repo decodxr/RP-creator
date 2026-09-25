@@ -43,6 +43,43 @@ class NPCInput(Strict):
 
 
 MemoryKind = Literal['episodic','semantic','social','emotional','promise','secret','temporal','summary','derived']
+DraftMemoryKind = Literal['episodic','semantic','social','emotional','promise','secret','temporal']
+
+
+class CharacterPromptInput(Strict):
+    prompt: str = Field(min_length=3, max_length=12000)
+
+
+class CharacterDraftMemory(Strict):
+    kind: DraftMemoryKind = 'semantic'
+    text: str = Field(min_length=1, max_length=2000)
+    importance: int = Field(default=7, ge=1, le=10)
+    # During generation, "self" means the character being created.
+    # Other values are player, *, an existing NPC id, or an existing NPC name
+    # that the engine resolves before returning/saving the draft.
+    known_by: list[str] = Field(default_factory=lambda: ['self'], min_length=1, max_length=50)
+
+
+class CharacterDraft(Strict):
+    name: str = Field(min_length=1, max_length=80)
+    profile: str = Field(min_length=1, max_length=4000)
+    location: str = Field(min_length=1, max_length=100)
+    mood: str = Field(default='neutro', max_length=100)
+    routine: list[Routine] = Field(default_factory=list, max_length=24)
+    goals: list[str] = Field(default_factory=list, max_length=8)
+    memories: list[CharacterDraftMemory] = Field(default_factory=list, max_length=20)
+
+    @field_validator('goals')
+    @classmethod
+    def check_draft_goals(cls, goals):
+        if any(len(g) > 300 for g in goals):
+            raise ValueError('Objetivos devem ter até 300 caracteres.')
+        return goals
+
+
+class NPCWithMemoriesInput(Strict):
+    npc: NPCInput
+    memories: list[CharacterDraftMemory] = Field(default_factory=list, max_length=20)
 
 
 class MemoryInput(Strict):
