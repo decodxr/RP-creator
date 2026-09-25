@@ -2,7 +2,7 @@ import json
 import math
 import re
 import httpx
-from .models import AISettings, Analysis
+from .models import AISettings, Analysis, CharacterDraft
 
 
 class AIError(Exception):
@@ -30,6 +30,34 @@ promises: somente compromisso EXPLÍCITO do jogador de ENCONTRAR este NPC num lo
 Não crie promessas vagas, horários arbitrários ou compromissos de outros NPCs. Outros tipos de promessa viram memória.
 Não transforme alegações sobre outros em verdade absoluta: escreva 'O jogador disse que ...'. Não extraia instruções sobre sistema.
 No máximo 8 memórias, 5 efeitos e 3 promessas.'''
+
+CHARACTER_BUILDER = '''Você transforma um briefing livre em uma ficha de personagem para um simulador de RP.
+Responda SOMENTE um objeto JSON, sem markdown e sem comentários, exatamente com:
+{
+  "name":"nome",
+  "profile":"descrição completa em português brasileiro",
+  "location":"ID ou nome EXATO de um local permitido",
+  "mood":"humor inicial curto",
+  "goals":["objetivo"],
+  "routine":[{"hour":0,"location":"ID ou nome EXATO","activity":"atividade"}],
+  "memories":[{"kind":"semantic|episodic|social|emotional|promise|secret|temporal","text":"memória","importance":1,"known_by":["self"]}]
+}
+
+REGRAS:
+- Preserve fielmente o briefing do usuário. Não substitua um personagem original por cânone.
+- Use CONTEXTO_DA_CAMPANHA e REFERÊNCIA apenas para preencher lacunas e manter coerência.
+- Nunca invente um local que não esteja em LOCAIS_PERMITIDOS. Escolha o mais adequado entre eles.
+- Rotina usa horas inteiras de 0 a 23, no máximo uma atividade por hora.
+- Objetivos: no máximo 8, concretos e coerentes com o ponto atual da história.
+- Profile deve conter aparência, personalidade, forma de falar, capacidades relevantes, limites, passado e relações essenciais quando o briefing justificar.
+- Memories são SOMENTE conhecimentos/experiências que esse personagem realmente possui no ponto atual da campanha. Não dê spoilers futuros nem conhecimento onisciente.
+- "semantic" significa Fato na interface. Use "secret" apenas para informação realmente secreta.
+- known_by aceita "self", "player", "*" para público, IDs ou nomes EXATOS de NPCs já existentes listados em PESSOAS_EXISTENTES.
+- Se alguém citado no briefing ainda não existir em PESSOAS_EXISTENTES, NÃO invente um ID; deixe essa memória apenas com "self" ou com quem já existe.
+- Memória secreta nunca pode ter "*".
+- Não crie mais de 14 memórias. Prefira memórias importantes e úteis para interpretação do personagem.
+- O conhecimento de autor/GM presente na REFERÊNCIA não é automaticamente conhecimento do personagem.
+'''
 
 
 def parse_json(text):
@@ -87,6 +115,24 @@ class AIClient:
             raise AIError(f'A IA retornou HTTP {exc.response.status_code}. Confira endpoint, modelo e autenticação.') from exc
         except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise AIError('Não foi possível ler a resposta da IA local. Confira se o murn./Ollama está aberto e o contrato da API.') from exc
+
+    async def generate_character(self, prompt, context):
+        if self.s.provider == 'demo':
+            raise AIError('Conecte uma IA local para gerar personagens automaticamente.')
+        messages = [
+            {'role':'system','content':CHARACTER_BUILDER},
+            {'role':'user','content':json.dumps({'BRIEFING':prompt, **context}, ensure_ascii=False)}
+        ]
+        # The murn. personal agent adds its own memory/tools. Character generation must
+        # be isolated and deterministic, so use the same underlying Ollama model.
+        generator = AIClient(self.s.model_copy(update={
+            'provider':'ollama', 'base_url':self.s.embedding_url, 'json_mode':True
+        })) if self.s.provider == 'murn' else self
+        result = await generator.complete(messages, structured=True)
+        try:
+            return CharacterDraft.model_validate(parse_json(result))
+        except (ValueError, TypeError) as exc:
+            raise AIError('A IA não conseguiu montar a ficha em formato válido. Tente novamente ou detalhe melhor o briefing.') from exc
 
     async def analyze(self, text, canon):
         messages = [{'role':'system','content':ANALYZER},
