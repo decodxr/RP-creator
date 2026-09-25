@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import unicodedata
 from datetime import datetime,timedelta
 from .ai import AIClient,AIError,SYSTEM
 from .db import uid,dumps
@@ -27,6 +28,96 @@ class Engine:
 
     def history(self,cid,npc,limit=50):
         return list(reversed(self.db.rows('SELECT * FROM turns WHERE campaign=? AND npc=? ORDER BY rowid DESC LIMIT ?',(cid,npc,limit))))
+
+    @staticmethod
+    def _label(value):
+        text=unicodedata.normalize('NFKD',str(value or ''))
+        return ''.join(ch for ch in text if not unicodedata.combining(ch)).strip().casefold()
+
+    async def generate_npc_draft(self,cid,prompt):
+        c=self.world.require(cid)
+        locations=self.db.rows('SELECT id,name,description FROM locations WHERE campaign=? ORDER BY rowid',(cid,))
+        people=self.db.rows('SELECT id,name FROM npcs WHERE campaign=? ORDER BY name',(cid,))
+        current=next((x for x in locations if x['id']==c['location']),{})
+        lore=select_lore(c,{'name':prompt[:120],'profile':prompt,'goals':[]},current,prompt,6500)
+        context={
+            'CONTEXTO_DA_CAMPANHA':{
+                'name':c['name'],'premise':c['premise'],'time':c['time'],
+                'player_name':c['player_name']
+            },
+            'LOCAIS_PERMITIDOS':locations,
+            'PESSOAS_EXISTENTES':[{'id':'player','name':c['player_name']},*people],
+            'REFERÊNCIA_DE_AUTOR_GM':lore
+        }
+        draft=await self.client().generate_character(prompt,context)
+
+        location_alias={}
+        for item in locations:
+            location_alias[self._label(item['id'])]=item['id']
+            location_alias[self._label(item['name'])]=item['id']
+        location=location_alias.get(self._label(draft.location))
+        if not location:
+            raise AIError('A IA escolheu um local que não existe nesta campanha. Crie o local primeiro ou peça para usar um dos locais cadastrados.')
+
+        routine=[]
+        hours=set()
+        for step in draft.routine:
+            lid=location_alias.get(self._label(step.location))
+            if not lid or step.hour in hours:
+                continue
+            hours.add(step.hour)
+            routine.append(step.model_copy(update={'location':lid}))
+
+        person_alias={
+            'self':'self','este personagem':'self','personagem':'self',
+            'player':'player','jogador':'player','*':'*','publico':'*','todos':'*'
+        }
+        person_alias[self._label(draft.name)]='self'
+        person_alias[self._label(c['player_name'])]='player'
+        for item in people:
+            person_alias[self._label(item['id'])]=item['id']
+            person_alias[self._label(item['name'])]=item['id']
+
+        memories=[]
+        for memory in draft.memories:
+            holders=[]
+            for holder in memory.known_by:
+                resolved=person_alias.get(self._label(holder))
+                if resolved and resolved not in holders:
+                    holders.append(resolved)
+            if memory.kind=='secret':
+                holders=[x for x in holders if x!='*']
+            elif '*' in holders:
+                holders=['*']
+            if not holders:
+                holders=['self']
+            memories.append(memory.model_copy(update={'known_by':holders}))
+
+        return draft.model_copy(update={
+            'location':location,
+            'routine':routine,
+            'memories':memories
+        }).model_dump()
+
+    def add_npc_with_memories(self,cid,data):
+        c=self.world.require(cid)
+        existing={r['id'] for r in self.db.rows('SELECT id FROM npcs WHERE campaign=?',(cid,))}
+        allowed={'self','player','*'}|existing
+        for memory in data.memories:
+            if not set(memory.known_by)<=allowed:
+                raise ValueError('Uma memória gerada referencia um personagem que não existe mais.')
+            if memory.kind=='secret' and '*' in memory.known_by:
+                raise ValueError('Uma memória secreta não pode ser pública.')
+        nid=self.world.add_npc(cid,data.npc)
+        with self.db.connect() as db:
+            for memory in data.memories:
+                known=[nid if x=='self' else x for x in memory.known_by]
+                entities=[x for x in known if x not in ('*','player')]
+                save_memory(db,cid,memory.kind,memory.text,known,c['time'],'creator-ai',
+                            memory.importance,entities)
+            if data.memories:
+                db.execute('UPDATE campaigns SET version=version+1 WHERE id=?',(cid,))
+        return nid
 
     async def chat(self,cid,data):
         async with self.lock(cid):
