@@ -5,6 +5,7 @@ from datetime import datetime,timedelta
 from .ai import AIClient,AIError,SYSTEM
 from .db import uid,dumps
 from .memory import MemoryEngine,save_memory
+from .lore import select_lore
 from .models import AISettings,Analysis,ExtractedMemory,Effect
 from .world import World,event,relationship
 from .vault import Vault
@@ -45,13 +46,27 @@ class Engine:
                 except AIError as exc: warnings.append(str(exc))
             memories=self.memory.search(cid,n['id'],data.message,ai.s.retrieval_limit,vector,ai.embedding_key)
             locations=self.db.rows('SELECT id,name FROM locations WHERE campaign=?',(cid,))
+            current_location=self.db.one('SELECT id,name,description FROM locations WHERE campaign=? AND id=?',(cid,c['location'])) or {}
             rel=self.db.one('SELECT values_json FROM relationships WHERE campaign=? AND source=? AND target=?',(cid,n['id'],'player'))
+            goals=json.loads(n['goals'])
             canon={'time':c['time'],'premise':c['premise'],'player_name':c['player_name'],
                    'npc':{k:n[k] for k in ('id','name','profile','mood','location')},
                    'locations':locations,'relationship':json.loads(rel['values_json']) if rel else {},
-                   'goals':json.loads(n['goals'])}
+                   'goals':goals}
             # Player private profile is not given to NPCs. Only witnessed memories are.
-            fixed=SYSTEM+'\nCANON\n'+dumps(canon)
+            base_fixed=SYSTEM+'\nCANON\n'+dumps(canon)
+            lore_npc={k:n[k] for k in ('id','name','profile','mood','location')}
+            lore_npc['goals']=goals
+            lore_budget=max(0,min(5200,ai.s.context_chars-len(base_fixed)-len(data.message)-3500))
+            lore=select_lore(c,lore_npc,current_location,data.message,lore_budget)
+            fixed=base_fixed
+            if lore:
+                fixed+=(
+                    '\nREFERENCE_LORE (conhecimento de autor/GM; NÃO significa que o personagem saiba estes fatos)\n'
+                    'Use este material para manter cenário, poderes, história e cânone coerentes. '
+                    'O personagem só pode revelar fatos que seu perfil, CANON, MEMORIES ou histórico justifiquem. '
+                    'Não entregue spoilers ou segredos como conhecimento pessoal sem essa justificativa.\n'+lore
+                )
             if len(fixed)+len(data.message)+300>ai.s.context_chars:
                 raise ValueError('Premissa, personagem e mensagem excedem o orçamento de contexto. Aumente o limite na conexão ou reduza esses textos.')
             remaining=max(1000,ai.s.context_chars-len(fixed)-len(data.message))
