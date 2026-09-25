@@ -1,7 +1,7 @@
 'use strict';
 const $=(s,r=document)=>r.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const S={token:'',campaigns:[],cid:localStorage.getItem('rp.campaign'),tab:'scene',world:null,npc:null,history:[],memories:[],settings:{},gm:false,busy:false,error:'',pending:null};
+const S={token:'',campaigns:[],cid:localStorage.getItem('rp.campaign'),tab:'scene',world:null,npc:null,history:[],memories:[],settings:{},gm:false,busy:false,error:'',pending:null,npcDraftMemories:[]};
 const kinds={episodic:'Episódica',semantic:'Fato',social:'Social',emotional:'Emocional',promise:'Promessa',secret:'Segredo',temporal:'Temporal',summary:'Resumo',derived:'Derivada'};
 const metrics={trust:'Confiança',friendship:'Amizade',respect:'Respeito',fear:'Medo',anger:'Raiva',affection:'Carinho',attraction:'Atração',loyalty:'Lealdade',suspicion:'Desconfiança'};
 const fmt=v=>new Date(v).toLocaleString('pt-BR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
@@ -51,7 +51,17 @@ async function loadWorld(){if(!S.cid)return;S.world=await api(ep(`?gm=${S.gm}`))
 async function switchTab(tab){S.error='';S.tab=tab;if(S.cid)await loadWorld();if(tab==='settings')S.settings=await api('/api/settings');render()}
 async function selectNPC(id){if(S.busy)return;S.npc=id;S.history=await api(ep('/history/'+id));S.tab='scene';render()}
 function campaignModal(){modal('Crie um novo mundo',`<form id="campaign-form"><div class="form-grid"><label class="full">Nome da campanha<input name="name" placeholder="Vila Aurora" maxlength="100" required></label><label class="full">Premissa<textarea name="premise" placeholder="Como é este mundo? Quais são suas regras?" maxlength="6000">Uma cidade contemporânea, cheia de histórias por descobrir.</textarea></label><label>Seu nome<input name="player_name" value="Lucas" maxlength="80" required></label><label class="check"><input type="checkbox" name="seed" checked>Incluir Sara e Alex</label><label class="full">Seu personagem<textarea name="player_profile" maxlength="4000" placeholder="Sua história, aparência e motivações. Este perfil é privado até ser contado aos NPCs."></textarea></label></div><div class="actions"><button class="primary">Dar vida ao mundo ↗</button></div></form>`)}
-function npcModal(id){const n=npc(id);modal(n?'Editar '+n.name:'Um novo personagem',`<form id="npc-form" data-id="${id||''}"><div class="form-grid"><label>Nome<input name="name" value="${esc(n?.name||'')}" maxlength="80" required></label><label>Local atual<select name="location">${locationsOptions(n?.location||S.world.campaign.location)}</select></label><label class="full">Personalidade & história<textarea name="profile" maxlength="4000" required placeholder="Idade, aparência, personalidade, gostos, valores…">${esc(n?.profile||'')}</textarea></label><label>Humor<input name="mood" value="${esc(n?.mood||'neutro')}" maxlength="100"></label><label>Objetivos (um por linha)<textarea name="goals">${esc(n?.goals.join('\n')||'')}</textarea></label><label class="full">Rotina: hora | nome do local | atividade<textarea name="routine" placeholder="8 | Praça | toma café\n15 | Parque | caminha entre as árvores">${esc(n?.routine.map(r=>`${r.hour} | ${loc(r.location)?.name} | ${r.activity}`).join('\n')||'')}</textarea></label><div class="help full">Locais disponíveis: ${S.world.locations.map(l=>esc(l.name)).join(', ')}. Para segredos, crie uma memória e escolha quem a conhece.</div></div><div class="actions"><button class="primary">Salvar personagem</button></div></form>`)}
+function draftHolderName(id){return id==='self'?'Este personagem':id==='player'?S.world.campaign.player_name:id==='*'?'Público · todos':name(id)}
+function renderNpcDraftMemories(){
+ const box=$('#npc-ai-memories');if(!box)return;
+ if(!S.npcDraftMemories.length){box.innerHTML='';return}
+ box.innerHTML=`<div class="help">Memórias sugeridas pela IA — desmarque qualquer uma que não queira salvar.</div>`+S.npcDraftMemories.map((m,i)=>`<label class="warning"><input type="checkbox" data-draft-memory="${i}" checked> <strong>${esc(kinds[m.kind]||m.kind)} · ${m.importance}/10</strong><br>${esc(m.text)}<br><small>Quem sabe: ${m.known_by.map(draftHolderName).map(esc).join(', ')}</small></label>`).join('');
+}
+function npcModal(id){
+ const n=npc(id);if(!n)S.npcDraftMemories=[];
+ const ai=!n?`<details open><summary>✨ Preencher personagem com IA</summary><div class="warning"><strong>Você pode colar um briefing inteiro.</strong><br>Descreva personalidade, aparência, história, poderes, objetivos, rotina, memórias, segredos e quem sabe cada memória. A IA usa apenas os locais e personagens já cadastrados.</div><label class="full">Prompt do personagem<textarea id="npc-ai-prompt" maxlength="12000" placeholder="Ex.: Tanjiro Kamado, depois do Monte Natagumo e antes do Trem Infinito. Inclua aparência, personalidade, Respiração da Água, Hinokami Kagura, objetivos, rotina na Mansão Borboleta e memórias que ele realmente sabe nesse ponto da história."></textarea></label><div class="actions">${button('generate-npc','✨ Preencher tudo com IA','primary','type="button"')}</div><div id="npc-ai-status" class="form-result" role="status"></div><div id="npc-ai-memories"></div></details>`:'';
+ modal(n?'Editar '+n.name:'Um novo personagem',`<form id="npc-form" data-id="${id||''}">${ai}<div class="form-grid"><label>Nome<input name="name" value="${esc(n?.name||'')}" maxlength="80" required></label><label>Local atual<select name="location">${locationsOptions(n?.location||S.world.campaign.location)}</select></label><label class="full">Personalidade & história<textarea name="profile" maxlength="4000" required placeholder="Idade, aparência, personalidade, gostos, valores…">${esc(n?.profile||'')}</textarea></label><label>Humor<input name="mood" value="${esc(n?.mood||'neutro')}" maxlength="100"></label><label>Objetivos (um por linha)<textarea name="goals">${esc(n?.goals.join('\n')||'')}</textarea></label><label class="full">Rotina: hora | nome do local | atividade<textarea name="routine" placeholder="8 | Praça | toma café\n15 | Parque | caminha entre as árvores">${esc(n?.routine.map(r=>`${r.hour} | ${loc(r.location)?.name} | ${r.activity}`).join('\n')||'')}</textarea></label><div class="help full">Locais disponíveis: ${S.world.locations.map(l=>esc(l.name)).join(', ')}. A IA também pode preparar memórias iniciais com audiência correta.</div></div><div class="actions"><button class="primary">Salvar personagem</button></div></form>`)
+}
 function memoryModal(){modal('Uma lembrança para guardar',`<form id="memory-form"><div class="form-grid"><label>Tipo<select name="kind">${Object.entries(kinds).filter(([k])=>!['summary','derived'].includes(k)).map(([v,t])=>`<option value="${v}">${t}</option>`).join('')}</select></label><label>Importância (1 a 10)<input name="importance" type="number" min="1" max="10" value="7"></label><label class="full">O que aconteceu ou é conhecido?<textarea name="text" maxlength="2000" required></textarea></label><label class="full">Quem sabe? (Ctrl/Cmd para selecionar vários)<select name="known_by" multiple size="4" required><option value="player" selected>Jogador</option><option value="*">Público · todos</option>${S.world.npcs.map(n=>`<option value="${n.id}">${esc(n.name)}</option>`).join('')}</select></label><label class="full">Chave do fato (opcional, substitui anterior da mesma audiência)<input name="fact_key" placeholder="player.likes.coffee" maxlength="100"></label></div><div class="actions"><button class="primary">Guardar memória</button></div></form>`)}
 async function memoryDetail(id){const m=await api(ep(`/memories/${id}?gm=${S.gm}`));modal(kinds[m.kind]||m.kind,`<p>${esc(m.text)}</p><p class="help">Conhecida por: ${m.known_by.map(name).map(esc).join(', ')}<br>Registrada: ${fmt(m.created)}<br>Origem: <span class="code">${esc(m.source)}</span><br>ID: <span class="code">${m.id}</span></p>${m.evidence?`<h3>Trecho de origem</h3><p>${esc(m.evidence)}</p>`:''}${m.parents.length?`<h3>Memórias originais</h3><p class="code">${m.parents.map(esc).join('<br>')}</p>`:''}${S.gm&&m.valid?button('invalidate','Marcar como superada','danger small',`data-id="${m.id}"`):''}`)}
 document.addEventListener('click',async ev=>{
@@ -70,6 +80,17 @@ document.addEventListener('click',async ev=>{
   if(action==='memory-detail')return await memoryDetail(el.dataset.id);
   if(action==='new-location')return modal('Um novo lugar',`<form id="location-form"><label>Nome<input name="name" required maxlength="100"></label><label>Descrição<textarea name="description" maxlength="2000"></textarea></label><div class="actions"><button class="primary">Criar local</button></div></form>`);
   if(action==='player')return modal('Seu personagem',`<form id="player-form"><label>Nome<input name="name" value="${esc(S.world.campaign.player_name)}" maxlength="80" required></label><label>Perfil privado<textarea name="profile" maxlength="4000">${esc(S.world.campaign.player_profile)}</textarea></label><div class="actions"><button class="primary">Salvar</button></div></form>`);
+  if(action==='generate-npc'){
+    const prompt=$('#npc-ai-prompt')?.value.trim(),status=$('#npc-ai-status'),f=$('#npc-form');
+    if(!prompt)return status.textContent='Escreva ou cole o prompt do personagem primeiro.';
+    el.disabled=true;status.textContent='A IA está montando perfil, objetivos, rotina e memórias…';
+    const draft=await api(ep('/npcs/generate'),'POST',{prompt});
+    f.elements.name.value=draft.name;f.elements.location.value=draft.location;f.elements.profile.value=draft.profile;f.elements.mood.value=draft.mood;
+    f.elements.goals.value=(draft.goals||[]).join('\n');
+    f.elements.routine.value=(draft.routine||[]).map(r=>`${r.hour} | ${loc(r.location)?.name||r.location} | ${r.activity}`).join('\n');
+    S.npcDraftMemories=draft.memories||[];renderNpcDraftMemories();
+    status.textContent=`Ficha preenchida. Revise antes de salvar. ${S.npcDraftMemories.length} memórias iniciais sugeridas.`;return;
+  }
   el.disabled=true;
   if(action==='move'){await api(ep('/move'),'POST',{location:el.dataset.id});await loadWorld();render();toast('Você chegou a '+loc(el.dataset.id)?.name);return}
   if(action==='advance'){await api(ep('/advance'),'POST',{minutes:Number(el.dataset.minutes)});await loadWorld();render();toast('O tempo passou. O mundo seguiu sua rotina.');return}
@@ -113,7 +134,13 @@ document.addEventListener('submit',async ev=>{
       const [hour,location,...rest]=line.split('|').map(x=>x.trim());const l=S.world.locations.find(l=>l.name.toLowerCase()===location?.toLowerCase());
       if(!l||!/^\d{1,2}$/.test(hour)||rest.length===0)throw Error('Use: hora | nome exato do local | atividade.');return {hour:Number(hour),location:l.id,activity:rest.join(' | ')};
     });
-    await api(ep('/npcs'+(f.dataset.id?'/'+f.dataset.id:'')),f.dataset.id?'PUT':'POST',d);close();await loadWorld();render();toast('Personagem salvo.');return;
+    if(f.dataset.id){
+      await api(ep('/npcs/'+f.dataset.id),'PUT',d);close();await loadWorld();render();toast('Personagem salvo.');return;
+    }
+    const selected=[...document.querySelectorAll('[data-draft-memory]:checked')].map(x=>S.npcDraftMemories[Number(x.dataset.draftMemory)]).filter(Boolean);
+    if(selected.length)await api(ep('/npcs/with-memories'),'POST',{npc:d,memories:selected});
+    else await api(ep('/npcs'),'POST',d);
+    S.npcDraftMemories=[];close();await loadWorld();render();toast(selected.length?`Personagem e ${selected.length} memórias salvos.`:'Personagem salvo.');return;
   }
   if(f.id==='memory-form'){d.known_by=Array.from(f.elements.known_by.selectedOptions).map(o=>o.value);d.importance=Number(d.importance);d.fact_key=d.fact_key||null;d.entities=d.known_by.filter(x=>!['*','player'].includes(x));await api(ep('/memories'),'POST',d);close();await loadWorld();render();toast('Memória registrada.');return}
   if(f.id==='search-form'){S.memories=await api(ep('/memories?'+new URLSearchParams(d)));$('#memory-results').innerHTML=memoryCards();return}
