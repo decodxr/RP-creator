@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rp-creator"
+version = "1.0.0"
+description = "Simulador narrativo local com memória persistente e Obsidian"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+rp-creator = "rp_creator.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["rp_creator*"]
+
+[tool.setuptools.package-data]
+rp_creator = ["static/*", "schema.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,8 @@
+{
+  "name": "rp-creator-ui-tests",
+  "private": true,
+  "description": "Optional DOM integration tests only. Node is not required to run RP creator.",
+  "scripts": {"test:ui": "node tests/ui_smoke.cjs"},
+  "devDependencies": {"jsdom": "30.1.1"},
+  "engines": {"node": ">=24"}
+}
