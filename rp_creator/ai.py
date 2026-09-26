@@ -63,14 +63,94 @@ REGRAS:
 
 def parse_json(text):
     text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text.strip())
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Local models sometimes prepend prose even when asked for JSON.
+        start=text.find('{')
+        if start < 0:
+            raise
+        value,_=json.JSONDecoder().raw_decode(text[start:])
+        return value
+
+
+def normalize_character_payload(value):
+    if not isinstance(value,dict):
+        return value
+    aliases={
+        'nome':'name','Name':'name',
+        'perfil':'profile','personality':'profile','personalidade':'profile',
+        'personalidade_historia':'profile','personalidade e história':'profile',
+        'local':'location','local_atual':'location','local atual':'location',
+        'humor':'mood','objetivos':'goals','rotina':'routine',
+        'memorias':'memories','memórias':'memories'
+    }
+    data={aliases.get(key,key):val for key,val in value.items()}
+
+    if isinstance(data.get('goals'),str):
+        data['goals']=[x.strip(' -•') for x in data['goals'].splitlines() if x.strip()]
+
+    routine=[]
+    raw_routine=data.get('routine',[])
+    if isinstance(raw_routine,str):
+        for line in raw_routine.splitlines():
+            parts=[x.strip() for x in line.split('|')]
+            if len(parts)>=3 and parts[0].isdigit():
+                routine.append({'hour':int(parts[0]),'location':parts[1],'activity':' | '.join(parts[2:])})
+    elif isinstance(raw_routine,list):
+        for item in raw_routine:
+            if not isinstance(item,dict):
+                continue
+            hour=item.get('hour',item.get('hora'))
+            if isinstance(hour,str) and hour.strip().isdigit():
+                hour=int(hour.strip())
+            routine.append({
+                'hour':hour,
+                'location':item.get('location',item.get('local','')),
+                'activity':item.get('activity',item.get('atividade','segue sua rotina'))
+            })
+    data['routine']=routine
+
+    kind_alias={
+        'fato':'semantic','semantic':'semantic','semantica':'semantic','semântica':'semantic',
+        'episodica':'episodic','episódica':'episodic','episodic':'episodic',
+        'social':'social','emocional':'emotional','emotional':'emotional',
+        'promessa':'promise','promise':'promise','segredo':'secret','secret':'secret',
+        'temporal':'temporal'
+    }
+    memories=[]
+    raw_memories=data.get('memories',[])
+    if isinstance(raw_memories,dict):
+        raw_memories=list(raw_memories.values())
+    if isinstance(raw_memories,list):
+        for item in raw_memories:
+            if not isinstance(item,dict):
+                continue
+            kind=str(item.get('kind',item.get('tipo','semantic'))).strip().casefold()
+            importance=item.get('importance',item.get('importancia',item.get('importância',7)))
+            if isinstance(importance,str):
+                hit=re.search(r'\d+',importance)
+                importance=int(hit.group()) if hit else 7
+            holders=item.get('known_by',item.get('quem_sabe',item.get('quem sabe',['self'])))
+            if isinstance(holders,str):
+                holders=[x.strip() for x in re.split(r'[,;+]',holders) if x.strip()]
+            memories.append({
+                'kind':kind_alias.get(kind,'semantic'),
+                'text':str(item.get('text',item.get('texto',''))).strip(),
+                'importance':max(1,min(10,int(importance or 7))),
+                'known_by':holders if isinstance(holders,list) and holders else ['self']
+            })
+    data['memories']=[m for m in memories if m['text']]
+
+    allowed={'name','profile','location','mood','goals','routine','memories'}
+    return {k:v for k,v in data.items() if k in allowed}
 
 
 class AIClient:
     def __init__(self, settings: AISettings):
         self.s = settings
 
-    async def complete(self, messages, structured=False):
+    async def complete(self, messages, structured=False, schema=None):
         if self.s.provider == 'demo':
             raise AIError('Modo demonstração não executa modelo de linguagem.')
         payload = {'model': self.s.model, 'messages': messages, 'stream': False,
@@ -88,7 +168,10 @@ class AIClient:
                 # Structured helper calls must stay bounded. Without a token cap,
                 # some local models can keep elaborating JSON for many minutes.
                 payload['options']['num_predict'] = 1800
-                if self.s.json_mode:
+                if schema is not None:
+                    # Ollama can constrain decoding directly with JSON Schema.
+                    payload['format'] = schema
+                elif self.s.json_mode:
                     payload['format'] = 'json'
         elif self.s.provider == 'custom':
             path = self.s.chat_path
@@ -137,16 +220,21 @@ class AIClient:
         # wall-clock deadline in addition to httpx's per-operation timeout.
         deadline = min(180, max(45, self.s.timeout))
         try:
-            result = await asyncio.wait_for(generator.complete(messages, structured=True), timeout=deadline)
+            result = await asyncio.wait_for(generator.complete(messages, structured=True, schema=CharacterDraft.model_json_schema()), timeout=deadline)
         except asyncio.TimeoutError as exc:
             raise AIError(
                 f'A geração do personagem passou de {deadline} segundos e foi cancelada. '
                 'Confira se o Ollama está respondendo e tente novamente com um prompt menor.'
             ) from exc
         try:
-            return CharacterDraft.model_validate(parse_json(result))
-        except (ValueError, TypeError) as exc:
-            raise AIError('A IA não conseguiu montar a ficha em formato válido. Tente novamente ou detalhe melhor o briefing.') from exc
+            payload=normalize_character_payload(parse_json(result))
+            return CharacterDraft.model_validate(payload)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            detail=str(exc).splitlines()[0][:220]
+            raise AIError(
+                'A IA respondeu, mas a ficha veio incompleta ou fora do formato esperado. '
+                f'Detalhe técnico: {detail}'
+            ) from exc
 
     async def analyze(self, text, canon):
         messages = [{'role':'system','content':ANALYZER},
