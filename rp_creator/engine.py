@@ -38,6 +38,19 @@ class Engine:
         escaped=re.escape(player)
         if player and re.search(rf'\b(?:eu\s+sou|me\s+chamo|meu\s+nome\s+e)\s+{escaped}\b',text):
             return True
+        # The NPC must never narrate the player's actions/emotions as if it
+        # controlled them. Mentioning the player's name in dialogue is fine,
+        # but using it as the subject of narration is a role swap.
+        if player:
+            action_verbs=(
+                'olha','observa','sorri','fala','responde','pensa','parece','cruza',
+                'descruza','faz','desvia','respira','caminha','aproxima','recua',
+                'hesita','assente','balanca','fecha','abre','ergue','abaixa',
+                'encara','fixa','suspira','ri','treme','demonstra','sente'
+            )
+            verbs='|'.join(action_verbs)
+            if re.search(rf'\b{escaped}\s+(?:se\s+)?(?:{verbs})\b',text):
+                return True
         profile_norm=unicodedata.normalize('NFKD',str(profile or ''))
         profile_norm=''.join(ch for ch in profile_norm if not unicodedata.combining(ch)).casefold()
         is_corps_member=('cacador' in profile_norm or 'hashira' in profile_norm) and 'corporacao' in profile_norm
@@ -289,27 +302,39 @@ class Engine:
             else:
                 recent_turns=self.history(cid,n['id'],12)
                 response=await ai.complete(messages)
-                role_problem=self._role_confusion(response,n['name'],c['player_name'],n['profile'])
-                continuity_problem=self._continuity_confusion(
-                    response,data.message,n['profile'],lore,recent_turns
-                )
-                if role_problem or continuity_problem:
+                for attempt in range(2):
+                    role_problem=self._role_confusion(response,n['name'],c['player_name'],n['profile'])
+                    continuity_problem=self._continuity_confusion(
+                        response,data.message,n['profile'],lore,recent_turns
+                    )
+                    if not role_problem and not continuity_problem:
+                        break
                     reason=(
-                        'trocou identidades ou contradisse um fato básico do próprio perfil'
+                        'trocou papéis, identidade ou narrou ações/emoções do jogador'
                         if role_problem else continuity_problem
                     )
                     correction={
                         'role':'system',
                         'content':(
                             f'CORREÇÃO OBRIGATÓRIA DE CONTINUIDADE: {reason}. '
-                            f'Você é exclusivamente {n["name"]}; {c["player_name"]} é exclusivamente o jogador. '
+                            f'Você interpreta SOMENTE {n["name"]}; {c["player_name"]} é SOMENTE o jogador. '
+                            f'NUNCA narre {c["player_name"]} como sujeito, nunca invente ações, emoções, pensamentos '
+                            'ou falas para o jogador. Narre apenas o NPC e o ambiente observável. '
                             'Leia novamente a última mensagem do jogador, o histórico e o seu perfil. '
                             'Não repita fatos que ele acabou de informar como se fossem novidade, '
                             'não peça definição de conceitos que seu personagem já conhece e faça a cena avançar. '
-                            'Reescreva somente a resposta do personagem, sem mencionar esta correção.'
+                            'Reescreva somente a resposta do NPC, sem mencionar esta correção.'
                         )
                     }
                     response=await ai.complete([messages[0],correction,*messages[1:]])
+                if (
+                    self._role_confusion(response,n['name'],c['player_name'],n['profile'])
+                    or self._continuity_confusion(response,data.message,n['profile'],lore,recent_turns)
+                ):
+                    raise AIError(
+                        'A IA continuou misturando o NPC com o jogador após correção automática. '
+                        'Nenhuma resposta foi salva; envie novamente.'
+                    )
                 try: analysis=await ai.analyze(data.message,canon)
                 except AIError as exc:
                     analysis=Analysis(); warnings.append(str(exc))
