@@ -318,3 +318,43 @@ def test_delete_turn_removes_transcript_and_direct_memories(env):
     assert result['deleted'] and result['user']=='Eu odeio café.'
     assert not e.db.one('SELECT id FROM turns WHERE id=?',(tid,))
     assert not e.db.one('SELECT id FROM memories WHERE source=?',(tid,))
+
+
+def test_role_confusion_triggers_clean_retry(env,monkeypatch):
+    e,cid,ns=env
+    e.db.set_setting('ai',AISettings().model_dump())
+    with e.db.connect() as db:
+        db.execute('UPDATE campaigns SET player_name=? WHERE id=?',('Kuren Matsumi',cid))
+        db.execute('UPDATE npcs SET name=?,profile=? WHERE id=?',
+                   ('Tanjiro Kamado','Tanjiro é um Caçador de Demônios da Corporação.',ns['Sara']['id']))
+    replies=iter([
+        'Eu sou Kuren Matsumi. Você é?',
+        '*Tanjiro inclina a cabeça.* Sim, sou Tanjiro Kamado. Quem é você?'
+    ])
+    seen=[]
+    async def complete(self,messages,**kwargs):
+        seen.append(messages)
+        return next(replies)
+    async def analyze(*args,**kwargs): return Analysis()
+    monkeypatch.setattr(AIClient,'complete',complete)
+    monkeypatch.setattr(AIClient,'analyze',analyze)
+    result=chat(e,cid,ns['Sara']['id'],'Você é Tanjiro Kamado?')
+    assert result['response'].startswith('*Tanjiro')
+    assert len(seen)==2
+    assert 'CORREÇÃO DE PAPÉIS' in seen[1][1]['content']
+
+
+def test_analysis_normalizes_portuguese_json(monkeypatch):
+    ai=AIClient(AISettings(provider='ollama',json_mode=True))
+    async def complete(self,messages,**kwargs):
+        return json.dumps({
+            'memórias':[{'tipo':'Fato','texto':'O jogador gosta de chá.',
+                         'importância':'7/10','evidência':'gosto de chá'}],
+            'efeitos':[{'métrica':'confiança','mudança':3,'evidência':'gosto de chá'}],
+            'promessas':[]
+        },ensure_ascii=False)
+    monkeypatch.setattr(AIClient,'complete',complete)
+    result=run(ai.analyze('gosto de chá',{'npc':{'name':'Sara'}}))
+    assert result.memories[0].kind=='semantic'
+    assert result.memories[0].importance==7
+    assert result.effects[0].metric=='trust'
