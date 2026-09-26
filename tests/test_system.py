@@ -280,7 +280,7 @@ def test_real_murn_contract_and_ollama_extraction(env,monkeypatch):
             assert body['messages'][-1]['content']=='Eu gosto de chá.'
             return httpx.Response(200,json={'message':'*Sara sorri.* Vou me lembrar disso.','model':'llama3.1:8b'})
         assert request.url.path=='/api/chat'
-        assert body['format']=='json'
+        assert isinstance(body['format'],dict) and body['format'].get('title')=='Analysis'
         assert body['messages'][0]['role']=='system'
         return httpx.Response(200,json={'message':{'content':json.dumps({
             'memories':[{'kind':'semantic','text':'O jogador gosta de chá.','importance':7,'evidence':'Eu gosto de chá.'}],
