@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from rp_creator.api import create_app
 from rp_creator.ai import AIClient,AIError
 from rp_creator.db import Database,uid,dumps
-from rp_creator.models import AISettings,CampaignInput,ChatInput,Analysis,ExtractedMemory,Effect,PromiseProposal
+from rp_creator.models import AISettings,CampaignInput,ChatInput,GroupChatInput,Analysis,ExtractedMemory,Effect,PromiseProposal
 from rp_creator.engine import Engine
 from rp_creator.memory import save_memory
 from rp_creator.vault import parse_note,note
@@ -28,6 +28,25 @@ def run(coro): return asyncio.run(coro)
 
 def chat(e,cid,nid,message,request_id=None):
     return run(e.chat(cid,ChatInput(npc=nid,message=message,request_id=request_id or uid())))
+
+
+def group_chat(e,cid,message,request_id=None):
+    return run(e.group_chat(cid,GroupChatInput(message=message,request_id=request_id or uid())))
+
+
+def test_group_chat_uses_colocated_npcs_and_at_mentions(env):
+    e,cid,ns=env
+    current=e.world.require(cid)['location']
+    with e.db.connect() as db:
+        db.execute('UPDATE npcs SET location=? WHERE campaign=?',(current,cid))
+    everyone=group_chat(e,cid,'Olá, pessoal.')
+    assert {r['npc_name'] for r in everyone['responses']}=={'Sara','Alex'}
+    direct=group_chat(e,cid,'@Sara, preciso falar com você.')
+    assert [r['npc_name'] for r in direct['responses']]==['Sara']
+    history=e.group_history(cid)
+    assert history[-2]['user']=='Olá, pessoal.'
+    assert {r['npc_name'] for r in history[-2]['responses']}=={'Sara','Alex'}
+    assert history[-1]['responses'][0]['npc_name']=='Sara'
 
 
 def test_persistent_chat_and_recall(env):
