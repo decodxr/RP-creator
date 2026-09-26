@@ -438,6 +438,7 @@ class AIClient:
             # these messages directly to murn.'s configured Ollama model.
             path = '/v1/rp/chat'
             payload = {
+                'model': self.s.model,
                 'messages': messages,
                 'temperature': payload.pop('temperature'),
                 'top_p': 0.9,
@@ -520,8 +521,14 @@ class AIClient:
                 detail=exc.response.text[:300].strip()
             suffix=f' Detalhe: {detail}' if detail else ''
             raise AIError(f'A IA retornou HTTP {exc.response.status_code}.{suffix} Confira endpoint, modelo e autenticação.') from exc
-        except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as exc:
-            raise AIError('Não foi possível ler a resposta da IA local. Confira se o murn./Ollama está aberto e o contrato da API.') from exc
+        except httpx.ConnectError as exc:
+            raise AIError(f'Não foi possível conectar à IA local em {self.s.base_url}. Confira se o murn./Ollama está aberto.') from exc
+        except httpx.ReadTimeout as exc:
+            raise AIError(f'A IA local excedeu o timeout de {self.s.timeout}s. Aumente o timeout na conexão ou use um modelo mais leve.') from exc
+        except (ValueError, KeyError, TypeError, IndexError) as exc:
+            raise AIError(f'Resposta inválida da IA local ({type(exc).__name__}: {str(exc)[:180]}). Confira o contrato da API.') from exc
+        except httpx.HTTPError as exc:
+            raise AIError(f'Falha de comunicação com a IA local ({type(exc).__name__}: {str(exc)[:180]}).') from exc
 
     async def generate_character(self, prompt, context):
         if self.s.provider == 'demo':
