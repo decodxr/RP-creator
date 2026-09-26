@@ -287,6 +287,9 @@ class Engine:
                 except AIError as exc: warnings.append(str(exc))
             memories=self.memory.search(cid,n['id'],data.message,ai.s.retrieval_limit,vector,ai.embedding_key)
             locations=self.db.rows('SELECT id,name FROM locations WHERE campaign=?',(cid,))
+            campaign_npc_names=[row['name'] for row in self.db.rows(
+                'SELECT name FROM npcs WHERE campaign=?',(cid,)
+            )]
             current_location=self.db.one('SELECT id,name,description FROM locations WHERE campaign=? AND id=?',(cid,c['location'])) or {}
             rel=self.db.one('SELECT values_json FROM relationships WHERE campaign=? AND source=? AND target=?',(cid,n['id'],'player'))
             goals=json.loads(n['goals'])
@@ -326,7 +329,8 @@ class Engine:
                 selected.append(entry); remaining-=length
             output_contract=(
                 '\nCONTRATO FINAL DA RESPOSTA\n'
-                f'- Você interpreta somente {n["name"]}.\n'
+                f'- Você interpreta somente {n["name"]}; não mude para outro personagem durante esta resposta.\n'
+                f'- Se narrar uma ação do NPC, o sujeito deve ser {n["name"]}, seu primeiro nome correto, "eu" ou sujeito implícito.\n'
                 f'- {c["player_name"]} é o jogador: nunca escreva ações, emoções, pensamentos ou falas por ele.\n'
                 '- Narração de ações do NPC deve ficar entre asteriscos. Falas do NPC podem usar travessão.\n'
                 '- Nunca use "você" como sujeito de uma ação narrativa. Na interface, "você" significa o jogador.\n'
@@ -338,7 +342,7 @@ class Engine:
                 # Old malformed model replies can poison later generations. Keep
                 # them in the database/UI, but never feed role-swapped replies back
                 # into the model's conversation context.
-                if self._role_confusion(turn['response'],n['name'],c['player_name'],n['profile']):
+                if self._role_confusion(turn['response'],n['name'],c['player_name'],n['profile'],campaign_npc_names):
                     continue
                 cost=len(turn['user'])+len(turn['response'])
                 if cost>remaining: break
@@ -352,21 +356,22 @@ class Engine:
                 recent_turns=self.history(cid,n['id'],12)
                 response=await ai.complete(messages)
                 for attempt in range(2):
-                    role_problem=self._role_confusion(response,n['name'],c['player_name'],n['profile'])
+                    role_problem=self._role_confusion(response,n['name'],c['player_name'],n['profile'],campaign_npc_names)
                     continuity_problem=self._continuity_confusion(
                         response,data.message,n['profile'],lore,recent_turns
                     )
                     if not role_problem and not continuity_problem:
                         break
                     reason=(
-                        'trocou papéis, identidade ou narrou ações/emoções do jogador'
+                        'trocou papéis/identidade, narrou o jogador ou mudou para outro NPC'
                         if role_problem else continuity_problem
                     )
                     correction={
                         'role':'system',
                         'content':(
                             f'CORREÇÃO OBRIGATÓRIA DE CONTINUIDADE: {reason}. '
-                            f'Você interpreta SOMENTE {n["name"]}; {c["player_name"]} é SOMENTE o jogador. '
+                            f'Você interpreta SOMENTE {n["name"]}; não assuma a identidade de nenhum outro personagem. '
+                            f'{c["player_name"]} é SOMENTE o jogador. '
                             f'NUNCA narre {c["player_name"]} como sujeito, nunca invente ações, emoções, pensamentos '
                             'ou falas para o jogador. Narre apenas o NPC e o ambiente observável. '
                             'Leia novamente a última mensagem do jogador, o histórico e o seu perfil. '
@@ -377,7 +382,7 @@ class Engine:
                     }
                     response=await ai.complete([messages[0],correction,*messages[1:]])
                 if (
-                    self._role_confusion(response,n['name'],c['player_name'],n['profile'])
+                    self._role_confusion(response,n['name'],c['player_name'],n['profile'],campaign_npc_names)
                     or self._continuity_confusion(response,data.message,n['profile'],lore,recent_turns)
                 ):
                     raise AIError(
