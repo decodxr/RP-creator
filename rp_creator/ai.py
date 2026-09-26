@@ -2,6 +2,7 @@ import asyncio
 import json
 import math
 import re
+import unicodedata
 import httpx
 from .models import AISettings, Analysis, CharacterDraft
 
@@ -74,49 +75,99 @@ def parse_json(text):
         return value
 
 
+def _key(value):
+    text=unicodedata.normalize('NFKD',str(value or ''))
+    text=''.join(ch for ch in text if not unicodedata.combining(ch)).casefold().strip()
+    return re.sub(r'[^a-z0-9*]+','_',text).strip('_')
+
+
+def _first_int(value,default=None):
+    if isinstance(value,bool):
+        return default
+    if isinstance(value,(int,float)):
+        return int(value)
+    hit=re.search(r'-?\d+',str(value or ''))
+    return int(hit.group()) if hit else default
+
+
 def normalize_character_payload(value):
     if not isinstance(value,dict):
         return value
-    aliases={
-        'nome':'name','Name':'name',
-        'perfil':'profile','personality':'profile','personalidade':'profile',
-        'personalidade_historia':'profile','personalidade e história':'profile',
-        'local':'location','local_atual':'location','local atual':'location',
-        'humor':'mood','objetivos':'goals','rotina':'routine',
-        'memorias':'memories','memórias':'memories'
-    }
-    data={aliases.get(key,key):val for key,val in value.items()}
 
-    if isinstance(data.get('goals'),str):
-        data['goals']=[x.strip(' -•') for x in data['goals'].splitlines() if x.strip()]
+    aliases={
+        'nome':'name','name':'name',
+        'perfil':'profile','profile':'profile','personality':'profile','personalidade':'profile',
+        'personalidade_historia':'profile','personalidade_e_historia':'profile',
+        'personality_history':'profile','personality_and_history':'profile',
+        'historia_e_personalidade':'profile','descricao':'profile','description':'profile',
+        'local':'location','location':'location','local_atual':'location','current_location':'location',
+        'humor':'mood','mood':'mood',
+        'objetivos':'goals','goals':'goals','objectives':'goals',
+        'rotina':'routine','routine':'routine',
+        'memorias':'memories','memories':'memories','lembrancas':'memories'
+    }
+    data={}
+    for key,val in value.items():
+        canonical=aliases.get(_key(key),_key(key))
+        data[canonical]=val
+
+    raw_goals=data.get('goals',[])
+    if isinstance(raw_goals,str):
+        data['goals']=[x.strip(' -•') for x in raw_goals.splitlines() if x.strip()]
+    elif isinstance(raw_goals,list):
+        goals=[]
+        for item in raw_goals:
+            if isinstance(item,str) and item.strip():
+                goals.append(item.strip())
+            elif isinstance(item,dict):
+                mapped={_key(k):v for k,v in item.items()}
+                text=mapped.get('goal') or mapped.get('objetivo') or mapped.get('text') or mapped.get('texto')
+                if text:
+                    goals.append(str(text).strip())
+        data['goals']=goals[:8]
+    else:
+        data['goals']=[]
 
     routine=[]
     raw_routine=data.get('routine',[])
     if isinstance(raw_routine,str):
         for line in raw_routine.splitlines():
             parts=[x.strip() for x in line.split('|')]
-            if len(parts)>=3 and parts[0].isdigit():
-                routine.append({'hour':int(parts[0]),'location':parts[1],'activity':' | '.join(parts[2:])})
+            hour=_first_int(parts[0]) if parts else None
+            if len(parts)>=3 and hour is not None and 0<=hour<=23:
+                routine.append({'hour':hour,'location':parts[1],'activity':' | '.join(parts[2:])})
     elif isinstance(raw_routine,list):
         for item in raw_routine:
+            if isinstance(item,str):
+                parts=[x.strip() for x in item.split('|')]
+                hour=_first_int(parts[0]) if parts else None
+                if len(parts)>=3 and hour is not None and 0<=hour<=23:
+                    routine.append({'hour':hour,'location':parts[1],'activity':' | '.join(parts[2:])})
+                continue
             if not isinstance(item,dict):
                 continue
-            hour=item.get('hour',item.get('hora'))
-            if isinstance(hour,str) and hour.strip().isdigit():
-                hour=int(hour.strip())
-            routine.append({
-                'hour':hour,
-                'location':item.get('location',item.get('local','')),
-                'activity':item.get('activity',item.get('atividade','segue sua rotina'))
-            })
-    data['routine']=routine
+            mapped={_key(k):v for k,v in item.items()}
+            hour=_first_int(mapped.get('hour',mapped.get('hora')))
+            location=mapped.get('location',mapped.get('local',mapped.get('local_atual','')))
+            activity=mapped.get('activity',mapped.get('atividade',mapped.get('acao','segue sua rotina')))
+            if hour is None or not 0<=hour<=23 or not location:
+                continue
+            routine.append({'hour':hour,'location':str(location).strip(),'activity':str(activity or 'segue sua rotina').strip()})
+    # Keep at most one activity per hour.
+    seen_hours=set()
+    data['routine']=[]
+    for item in routine:
+        if item['hour'] in seen_hours:
+            continue
+        seen_hours.add(item['hour'])
+        data['routine'].append(item)
 
     kind_alias={
-        'fato':'semantic','semantic':'semantic','semantica':'semantic','semântica':'semantic',
-        'episodica':'episodic','episódica':'episodic','episodic':'episodic',
+        'fato':'semantic','fact':'semantic','factual':'semantic','semantic':'semantic','semantica':'semantic',
+        'episodica':'episodic','episodic':'episodic','evento':'episodic',
         'social':'social','emocional':'emotional','emotional':'emotional',
         'promessa':'promise','promise':'promise','segredo':'secret','secret':'secret',
-        'temporal':'temporal'
+        'temporal':'temporal','tempo':'temporal'
     }
     memories=[]
     raw_memories=data.get('memories',[])
@@ -126,21 +177,33 @@ def normalize_character_payload(value):
         for item in raw_memories:
             if not isinstance(item,dict):
                 continue
-            kind=str(item.get('kind',item.get('tipo','semantic'))).strip().casefold()
-            importance=item.get('importance',item.get('importancia',item.get('importância',7)))
-            if isinstance(importance,str):
-                hit=re.search(r'\d+',importance)
-                importance=int(hit.group()) if hit else 7
-            holders=item.get('known_by',item.get('quem_sabe',item.get('quem sabe',['self'])))
+            mapped={_key(k):v for k,v in item.items()}
+            kind=_key(mapped.get('kind',mapped.get('tipo','semantic')))
+            importance=_first_int(mapped.get('importance',mapped.get('importancia',7)),7)
+            holders=mapped.get('known_by',mapped.get('quem_sabe',mapped.get('audiencia',['self'])))
             if isinstance(holders,str):
                 holders=[x.strip() for x in re.split(r'[,;+]',holders) if x.strip()]
+            elif isinstance(holders,list):
+                cleaned=[]
+                for holder in holders:
+                    if isinstance(holder,str) and holder.strip():
+                        cleaned.append(holder.strip())
+                    elif isinstance(holder,dict):
+                        hm={_key(k):v for k,v in holder.items()}
+                        name=hm.get('id') or hm.get('name') or hm.get('nome')
+                        if name:
+                            cleaned.append(str(name).strip())
+                holders=cleaned
+            else:
+                holders=['self']
+            text=mapped.get('text',mapped.get('texto',mapped.get('memory',mapped.get('memoria',''))))
             memories.append({
                 'kind':kind_alias.get(kind,'semantic'),
-                'text':str(item.get('text',item.get('texto',''))).strip(),
+                'text':str(text or '').strip(),
                 'importance':max(1,min(10,int(importance or 7))),
-                'known_by':holders if isinstance(holders,list) and holders else ['self']
+                'known_by':holders if holders else ['self']
             })
-    data['memories']=[m for m in memories if m['text']]
+    data['memories']=[m for m in memories if m['text']][:20]
 
     allowed={'name','profile','location','mood','goals','routine','memories'}
     return {k:v for k,v in data.items() if k in allowed}
@@ -243,12 +306,43 @@ class AIClient:
         try:
             payload=normalize_character_payload(parse_json(result))
             return CharacterDraft.model_validate(payload)
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            detail=str(exc).splitlines()[0][:220]
-            raise AIError(
-                'A IA respondeu, mas a ficha veio incompleta ou fora do formato esperado. '
-                f'Detalhe técnico: {detail}'
-            ) from exc
+        except (ValueError, TypeError, json.JSONDecodeError) as first_exc:
+            # One compact repair pass handles common 8B-model issues such as
+            # localized keys, missing wrapper fields or malformed nested objects.
+            errors=[]
+            if hasattr(first_exc,'errors'):
+                try:
+                    errors=[{'loc':list(e.get('loc',[])),'msg':e.get('msg','')} for e in first_exc.errors()[:8]]
+                except Exception:
+                    errors=[]
+            repair_messages=[
+                {'role':'system','content':CHARACTER_BUILDER + '\nCORREÇÃO: devolva todos os campos obrigatórios e corrija somente a estrutura JSON.'},
+                {'role':'user','content':json.dumps({
+                    'BRIEFING_ORIGINAL':prompt,
+                    'RESPOSTA_ANTERIOR':result[:12000],
+                    'ERROS_DE_VALIDACAO':errors,
+                    'LOCAIS_PERMITIDOS':context.get('LOCAIS_PERMITIDOS',[]),
+                    'PESSOAS_EXISTENTES':context.get('PESSOAS_EXISTENTES',[])
+                },ensure_ascii=False)}
+            ]
+            try:
+                repaired=await asyncio.wait_for(
+                    generator.complete(repair_messages,structured=True,schema=CharacterDraft.model_json_schema()),
+                    timeout=min(75,deadline)
+                )
+                payload=normalize_character_payload(parse_json(repaired))
+                return CharacterDraft.model_validate(payload)
+            except Exception as repair_exc:
+                detail='; '.join(
+                    f"{'.'.join(map(str,e.get('loc',[]))) or 'campo'}: {e.get('msg','inválido')}"
+                    for e in errors[:4]
+                )
+                if not detail:
+                    detail=str(repair_exc).splitlines()[0][:300]
+                raise AIError(
+                    'A IA respondeu, mas não conseguiu fechar a ficha automaticamente. '
+                    f'Detalhe: {detail}'
+                ) from repair_exc
 
     async def analyze(self, text, canon):
         messages = [{'role':'system','content':ANALYZER},
