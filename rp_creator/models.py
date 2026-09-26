@@ -130,7 +130,11 @@ class ChatInput(Strict):
 
 class GroupChatInput(Strict):
     message: str = Field(min_length=1, max_length=6000)
-    request_id: str = Field(min_length=8, max_length=80, pattern=r'^[A-Za-z0-9-]+    provider: Literal['murn','openai','ollama','custom','demo'] = 'murn'
+    request_id: str = Field(min_length=8, max_length=80, pattern=r'^[A-Za-z0-9-]+$')
+
+
+class AISettings(Strict):
+    provider: Literal['murn','openai','ollama','custom','demo'] = 'murn'
     base_url: str = 'http://127.0.0.1:7331'
     model: str = Field(default='llama3.1:8b', min_length=1, max_length=200)
     chat_path: str = Field(default='/v1/chat', max_length=200)
