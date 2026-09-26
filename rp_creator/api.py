@@ -209,6 +209,12 @@ def create_app(root=None,testing=False):
         engine.world.require(cid)
         return engine.history(cid,nid,limit)
 
+    @app.delete('/api/campaigns/{cid}/turns/{tid}')
+    async def delete_turn(cid:str,tid:str):
+        async with engine.lock(cid):
+            engine.world.require(cid)
+            return engine.delete_turn(cid,tid)
+
     @app.get('/api/campaigns/{cid}/memories')
     async def memories(cid:str,q:str=Query('',max_length=2000),actor:str='player',limit:int=Query(50,ge=1,le=200),invalid:bool=False):
         engine.world.require(cid)
