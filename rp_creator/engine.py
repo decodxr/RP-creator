@@ -43,12 +43,14 @@ class Engine:
                 if len(part)>=3 and part not in {'dos','das','de','da','do'}
             )
         aliases=list(dict.fromkeys(sorted(aliases,key=len,reverse=True)))
-        if any(re.search(rf'\b(?:eu\s+sou|me\s+chamo|meu\s+nome\s+e)\s+{re.escape(alias)}\b',text) for alias in aliases):
-            return True
 
-        # The NPC must never narrate the player's actions/emotions or fabricate
-        # player dialogue. Match both the full player name and natural short names
-        # (e.g. "Kuren" when the configured name is "Kuren Matsumi").
+        for alias in aliases:
+            escaped=re.escape(alias)
+            if re.search(rf'\b(?:eu\s+sou|me\s+chamo|meu\s+nome\s+e)\s+{escaped}\b',text):
+                return True
+
+        # Detect the model narrating or speaking for the player. Accept both
+        # the configured full name and natural short-name references.
         action_verbs=(
             'olha','observa','sorri','fala','diz','pergunta','responde','pensa',
             'parece','cruza','descruza','faz','desvia','respira','caminha',
@@ -58,16 +60,25 @@ class Engine:
         )
         verbs='|'.join(action_verbs)
         for alias in aliases:
-            if re.search(rf'\b{re.escape(alias)}\s+(?:se\s+)?(?:{verbs})\b',text):
+            escaped=re.escape(alias)
+            if re.search(rf'\b{escaped}\s+(?:se\s+)?(?:{verbs})\b',text):
                 return True
-            if re.search(rf'\b{re.escape(alias)}\b[^.!?\n]{{0,90}}(?:—|-)\s*[^.!?\n]{{1,180}}(?:—|-)?\s*(?:pergunta|diz|responde)\b',text):
+            if re.search(rf'\b{escaped}\b[^.!?]{{0,90}}(?:—|-)\s*[^.!?]{{1,180}}(?:—|-)?\s*(?:pergunta|diz|responde)\b',text):
                 return True
 
-        # In this UI "você" is the player. Narrative prose such as
-        # "Você olha para Kuren" means the model has seized control of the player.
-        # Direct NPC dialogue beginning with "— Você..." is excluded.
-        narration=text
-        narration=re.sub(r'(?m)^\s*[—-].*
+        # In the RP UI, second-person narrative actions control the player.
+        # Dialogue such as '— Você acha...?' does not match because it starts
+        # with a dash rather than directly with 'voce'.
+        if re.search(rf'(?:^|[.!?]\s+)voce\s+(?:se\s+)?(?:{verbs})\b',text):
+            return True
+
+        profile_norm=unicodedata.normalize('NFKD',str(profile or ''))
+        profile_norm=''.join(ch for ch in profile_norm if not unicodedata.combining(ch)).casefold()
+        is_corps_member=('cacador' in profile_norm or 'hashira' in profile_norm) and 'corporacao' in profile_norm
+        if is_corps_member and re.search(r'\b(?:eu\s+)?nao\s+sou\s+(?:da|de)\s+corporacao\b',text):
+            return True
+        return False
+
     @staticmethod
     def _norm_text(value):
         text=unicodedata.normalize('NFKD',str(value or ''))
