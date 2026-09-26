@@ -34,6 +34,20 @@ def group_chat(e,cid,message,request_id=None):
     return run(e.group_chat(cid,GroupChatInput(message=message,request_id=request_id or uid())))
 
 
+def test_group_scene_context_is_trimmed_to_budget(env):
+    e,cid,ns=env
+    current=e.world.require(cid)['location']
+    with e.db.connect() as db:
+        db.execute('UPDATE npcs SET location=? WHERE id=?',(current,ns['Sara']['id']))
+    result=run(e.chat(cid,ChatInput(
+        npc=ns['Sara']['id'],
+        message='Oi.',
+        request_id=uid(),
+        scene_context='contexto antigo ' * 450
+    )))
+    assert result['response']
+
+
 def test_group_chat_uses_colocated_npcs_and_at_mentions(env):
     e,cid,ns=env
     current=e.world.require(cid)['location']
