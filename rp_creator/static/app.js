@@ -14,6 +14,18 @@ async function api(path,method='GET',body){
  let d;try{d=await r.json()}catch{throw Error('O servidor não retornou uma resposta válida.')}
  if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:(d.detail||[]).map(e=>e.msg).join('; ')||'Não foi possível concluir.');return d;
 }
+async function timedApi(path,method='GET',body,ms=190000){
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),ms);
+ try{
+  const r=await fetch(path,{method,signal:controller.signal,headers:{'Content-Type':'application/json','X-RP-Token':S.token},body:body===undefined?undefined:JSON.stringify(body)});
+  let d;try{d=await r.json()}catch{throw Error('O servidor não retornou uma resposta válida.')}
+  if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:(d.detail||[]).map(e=>e.msg).join('; ')||'Não foi possível concluir.');
+  return d;
+ }catch(err){
+  if(err?.name==='AbortError')throw Error('A geração demorou mais de 3 minutos e foi cancelada. Verifique o Ollama/murn. e tente novamente.');
+  throw err;
+ }finally{clearTimeout(timer)}
+}
 let toastTimer;function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),4500)}
 function modal(title,body){$('#modal-content').innerHTML=`<div class="modal-head"><h2>${esc(title)}</h2><button data-action="close" aria-label="Fechar">×</button></div>${body}<div id="form-error" class="form-error" role="alert"></div>`;$('#modal').showModal()}
 function close(){$('#modal').close()}
@@ -83,8 +95,8 @@ document.addEventListener('click',async ev=>{
   if(action==='generate-npc'){
     const prompt=$('#npc-ai-prompt')?.value.trim(),status=$('#npc-ai-status'),f=$('#npc-form');
     if(!prompt)return status.textContent='Escreva ou cole o prompt do personagem primeiro.';
-    el.disabled=true;status.textContent='A IA está montando perfil, objetivos, rotina e memórias…';
-    const draft=await api(ep('/npcs/generate'),'POST',{prompt});
+    el.disabled=true;status.textContent='A IA está montando perfil, objetivos, rotina e memórias… Isso normalmente leva segundos; o limite é 3 minutos.';
+    const draft=await timedApi(ep('/npcs/generate'),'POST',{prompt},190000);
     f.elements.name.value=draft.name;f.elements.location.value=draft.location;f.elements.profile.value=draft.profile;f.elements.mood.value=draft.mood;
     f.elements.goals.value=(draft.goals||[]).join('\n');
     f.elements.routine.value=(draft.routine||[]).map(r=>`${r.hour} | ${loc(r.location)?.name||r.location} | ${r.activity}`).join('\n');
