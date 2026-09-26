@@ -26,6 +26,9 @@ server.on('exit',()=>{try{fs.rmSync(testData,{recursive:true,force:true})}catch{
  const select=q('#npc-select');select.value=[...select.options].find(o=>o.textContent==='Sara').value;select.dispatchEvent(new w.Event('change',{bubbles:true}));await wait(()=>q('#message-input')&&!q('#message-input').disabled);
  q('#message-input').value='Eu odeio café e adoro chá de hibisco.';submit('#chat-form');await wait(()=>q('.message.npc'));
  assert(w.document.body.textContent.includes('Demonstração'));console.log('PASS create campaign, configure AI, select NPC, send chat');
+ const mode=q('#npc-select');mode.value='__group__';mode.dispatchEvent(new w.Event('change',{bubbles:true}));await wait(()=>q('.group-mentions'));
+ q('#message-input').value='@Sara oi';submit('#chat-form');await wait(()=>q('.group-message')&&w.document.body.textContent.includes('@Sara oi'));
+ assert(w.document.body.textContent.includes('Sem @: todos respondem. Com @Nome: só o personagem marcado responde.'));console.log('PASS group scene and @ mention');
  click('[data-tab=memory]');await wait(()=>q('#memory-results'));assert(q('#memory-results').textContent.includes('hibisco'));
  click('[data-action=memory-detail]');await wait(()=>q('#modal-content').textContent.includes('Origem:'));click('[data-action=close]');console.log('PASS memories and evidence dialog');
  click('[data-tab=world]');await wait(()=>q('[data-action=new-location]'));click('[data-action=new-location]');q('[name=name]').value='Farol';q('[name=description]').value='Um farol à beira-mar';submit('#location-form');await wait(()=>[...w.document.querySelectorAll('h2')].some(x=>x.textContent==='Farol'));
