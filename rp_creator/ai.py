@@ -184,6 +184,13 @@ class AIClient:
         try:
             async with httpx.AsyncClient(timeout=self.s.timeout, trust_env=False, follow_redirects=False) as client:
                 r = await client.post(self.s.base_url + path, json=payload, headers=headers)
+                # Older Ollama builds reject a JSON-Schema object in "format" with
+                # HTTP 400. Retry automatically using legacy JSON mode instead of
+                # making the user change Ollama just to create a character.
+                if self.s.provider == 'ollama' and schema is not None and r.status_code == 400:
+                    fallback=dict(payload)
+                    fallback['format']='json'
+                    r = await client.post(self.s.base_url + path, json=fallback, headers=headers)
                 r.raise_for_status()
                 data = r.json()
             if self.s.provider == 'murn':
@@ -200,7 +207,14 @@ class AIClient:
                 raise ValueError('Resposta vazia ou muito longa')
             return result.strip()
         except httpx.HTTPStatusError as exc:
-            raise AIError(f'A IA retornou HTTP {exc.response.status_code}. Confira endpoint, modelo e autenticação.') from exc
+            detail=''
+            try:
+                body=exc.response.json()
+                detail=str(body.get('error') or body.get('detail') or '')[:300]
+            except Exception:
+                detail=exc.response.text[:300].strip()
+            suffix=f' Detalhe: {detail}' if detail else ''
+            raise AIError(f'A IA retornou HTTP {exc.response.status_code}.{suffix} Confira endpoint, modelo e autenticação.') from exc
         except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise AIError('Não foi possível ler a resposta da IA local. Confira se o murn./Ollama está aberto e o contrato da API.') from exc
 
