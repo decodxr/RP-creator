@@ -13,7 +13,7 @@ server.on('exit',()=>{try{fs.rmSync(testData,{recursive:true,force:true})}catch{
  await new Promise((resolve,reject)=>{server.stderr.on('data',d=>{if(d.toString().includes('Uvicorn running'))resolve()});server.on('exit',code=>reject(Error('server stopped '+code)));setTimeout(()=>reject(Error('server did not start')),5000).unref()});
  const vc=new VirtualConsole();let errors=[];vc.on('jsdomError',e=>errors.push(e.message));
  const dom=new JSDOM(fs.readFileSync(root+'index.html','utf8'),{url:base,runScripts:'outside-only',virtualConsole:vc});const w=dom.window;
- w.fetch=(url,options)=>fetch(new URL(url,base),options);
+ w.fetch=(url,options={})=>{const opts={...options};delete opts.signal;return fetch(new URL(url,base),opts)};
  w.HTMLDialogElement.prototype.showModal=function(){this.open=true};w.HTMLDialogElement.prototype.close=function(){this.open=false};
  w.eval(fs.readFileSync(root+'app.js','utf8'));
  const wait=async(fn)=>{for(let i=0;i<300;i++){if(fn())return;await new Promise(r=>setTimeout(r,20))}throw Error('UI wait failed: '+w.document.body.textContent.slice(-2000))};
