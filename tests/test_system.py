@@ -358,3 +358,49 @@ def test_analysis_normalizes_portuguese_json(monkeypatch):
     assert result.memories[0].kind=='semantic'
     assert result.memories[0].importance==7
     assert result.effects[0].metric=='trust'
+
+
+def test_continuity_detects_reasking_explicit_identity_fact():
+    reason=Engine._continuity_confusion(
+        'Você é... meio oni?',
+        'Sou meio oni. Mas nunca comi humanos.',
+        'Tanjiro é um Caçador de Demônios.',
+        '',
+        []
+    )
+    assert 'acabou de afirmar' in reason
+
+
+def test_continuity_detects_definition_of_known_concept():
+    reason=Engine._continuity_confusion(
+        'E o que você quer dizer com "Respiração"?',
+        'Ainda consigo usar técnicas de Respiração.',
+        'Tanjiro domina a Respiração da Água e conhece técnicas de Respiração.',
+        '',
+        []
+    )
+    assert 'conceito que o personagem já conhece' in reason
+
+
+def test_continuity_retry_rewrites_bad_reply(env,monkeypatch):
+    e,cid,ns=env
+    e.db.set_setting('ai',AISettings().model_dump())
+    with e.db.connect() as db:
+        db.execute('UPDATE campaigns SET player_name=? WHERE id=?',('Kuren Matsumi',cid))
+        db.execute('UPDATE npcs SET name=?,profile=? WHERE id=?',
+                   ('Tanjiro Kamado','Tanjiro é Caçador de Demônios e domina a Respiração da Água.',ns['Sara']['id']))
+    replies=iter([
+        'Você é... meio oni? E o que você quer dizer com Respiração?',
+        '*Tanjiro observa Kuren com atenção.* Então você consegue usar Respiração apesar do sangue de oni?'
+    ])
+    seen=[]
+    async def complete(self,messages,**kwargs):
+        seen.append(messages)
+        return next(replies)
+    async def analyze(*args,**kwargs): return Analysis()
+    monkeypatch.setattr(AIClient,'complete',complete)
+    monkeypatch.setattr(AIClient,'analyze',analyze)
+    result=chat(e,cid,ns['Sara']['id'],'Sou meio oni. Ainda consigo usar técnicas de Respiração.')
+    assert result['response'].startswith('*Tanjiro')
+    assert len(seen)==2
+    assert 'CORREÇÃO OBRIGATÓRIA DE CONTINUIDADE' in seen[1][1]['content']
