@@ -45,6 +45,54 @@ class Engine:
             return True
         return False
 
+    @staticmethod
+    def _norm_text(value):
+        text=unicodedata.normalize('NFKD',str(value or ''))
+        text=''.join(ch for ch in text if not unicodedata.combining(ch)).casefold()
+        return re.sub(r'[^a-z0-9]+',' ',text).strip()
+
+    @classmethod
+    def _continuity_confusion(cls,response,current_message,profile,lore,recent_turns):
+        answer=cls._norm_text(response)
+        current=cls._norm_text(current_message)
+        knowledge=cls._norm_text((profile or '')+'\n'+(lore or ''))
+
+        # If the player explicitly says "sou X", the NPC must not immediately
+        # ask "você é X?" as though that information was never given.
+        for match in re.finditer(r'\b(?:eu\s+)?sou\s+([a-z0-9]+(?:\s+[a-z0-9]+){0,4})',current):
+            phrase=match.group(1).strip()
+            if len(phrase) < 4:
+                continue
+            words=phrase.split()
+            # Trim generic tail words that frequently belong to the next clause.
+            while words and words[-1] in {'e','mas','que','com','sem','tambem'}:
+                words.pop()
+            phrase=' '.join(words)
+            if phrase and re.search(rf'\bvoce\s+e\s+(?:mesmo\s+)?{re.escape(phrase)}\b',answer):
+                return 'repetiu como pergunta um fato que o jogador acabou de afirmar'
+
+        # A character should not ask for the basic definition of a concept that
+        # is clearly part of their own profile/canon knowledge.
+        definition_patterns=(
+            r'o\s+que\s+voce\s+quer\s+dizer\s+com\s+([a-z0-9 ]{3,50})',
+            r'o\s+que\s+quer\s+dizer\s+com\s+([a-z0-9 ]{3,50})',
+            r'o\s+que\s+e\s+([a-z0-9 ]{3,40})'
+        )
+        for pattern in definition_patterns:
+            for match in re.finditer(pattern,answer):
+                concept=' '.join(match.group(1).split()[:5]).strip()
+                if len(concept) >= 4 and concept in knowledge:
+                    return f'perguntou a definição de um conceito que o personagem já conhece: {concept}'
+
+        # Catch verbatim repeated questions from the NPC's recent turns.
+        questions=[cls._norm_text(q) for q in re.findall(r'[^?]{4,}\?',str(response or ''))]
+        previous=' '.join(str(t.get('response') or '') for t in (recent_turns or [])[-4:])
+        previous_norm=cls._norm_text(previous)
+        for q in questions:
+            if len(q) >= 18 and q in previous_norm:
+                return 'repetiu uma pergunta que já havia feito recentemente'
+        return ''
+
     def delete_turn(self,cid,tid):
         turn=self.db.one('SELECT * FROM turns WHERE campaign=? AND id=?',(cid,tid))
         if not turn:
@@ -227,15 +275,26 @@ class Engine:
                 response,analysis=self.demo(data.message,n,selected)
                 warnings.append('Demonstração determinística: conecte o murn. para RP com IA.')
             else:
+                recent_turns=self.history(cid,n['id'],12)
                 response=await ai.complete(messages)
-                if self._role_confusion(response,n['name'],c['player_name'],n['profile']):
+                role_problem=self._role_confusion(response,n['name'],c['player_name'],n['profile'])
+                continuity_problem=self._continuity_confusion(
+                    response,data.message,n['profile'],lore,recent_turns
+                )
+                if role_problem or continuity_problem:
+                    reason=(
+                        'trocou identidades ou contradisse um fato básico do próprio perfil'
+                        if role_problem else continuity_problem
+                    )
                     correction={
                         'role':'system',
                         'content':(
-                            f'CORREÇÃO DE PAPÉIS: você é exclusivamente {n["name"]}; '
-                            f'{c["player_name"]} é exclusivamente o jogador. '
-                            'A resposta anterior trocou identidades ou contradisse um fato básico do seu próprio perfil. '
-                            'Responda novamente à última mensagem sem mencionar esta correção, mantendo os fatos do CANON.'
+                            f'CORREÇÃO OBRIGATÓRIA DE CONTINUIDADE: {reason}. '
+                            f'Você é exclusivamente {n["name"]}; {c["player_name"]} é exclusivamente o jogador. '
+                            'Leia novamente a última mensagem do jogador e o seu perfil. '
+                            'Não repita fatos que ele acabou de informar como se fossem novidade, '
+                            'não peça definição de conceitos que seu personagem já conhece e faça a cena avançar. '
+                            'Reescreva somente a resposta do personagem, sem mencionar esta correção.'
                         )
                     }
                     response=await ai.complete([messages[0],correction,*messages[1:]])
