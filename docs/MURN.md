@@ -6,13 +6,13 @@ Conferi o código do seu repositório `decodxr/murn.`. O endpoint real é `POST 
 
 1. Abra o murn. e verifique `curl http://127.0.0.1:7331/health` (ou `7332/health` no aplicativo desktop).
 2. Inicie o RP creator com `./start.sh` e abra `http://127.0.0.1:7342`.
-3. Em **Conexão com IA**, selecione **murn. local (API real)** e informe `http://127.0.0.1:7331` ou `http://127.0.0.1:7332`.
+3. Em **Conexão com IA**, selecione **murn. local · RP isolado** e informe `http://127.0.0.1:7331` ou `http://127.0.0.1:7332`.
 4. Confirme o modelo configurado no murn. (padrão do código: `llama3.1:8b`), salve e clique em **Testar conexão salva**.
-5. Crie uma campanha e converse com Sara.
+5. Crie uma campanha e converse com um NPC.
 
-O RP creator envia ao murn. uma mensagem com contexto do NPC e histórico da conversa em `history`, usando `source="rp-creator"`. Lê `message` da resposta. Ele não envia `session_id`; o murn. cria uma sessão nova a cada chamada e pode guardar o prompt no próprio banco de sessões. O murn. acrescenta seus próprios prompts de identidade e ferramentas, o que pode influenciar o personagem.
+O RP creator usa `POST /v1/rp/chat`. Esse endpoint recebe a lista completa de mensagens do RP e envia diretamente ao Ollama configurado dentro do murn. Ele **não** acrescenta a identidade pessoal do murn., não passa pelo classificador de programação, não habilita ferramentas, não consulta a memória pessoal e não cria sessão do assistente. Isso evita que o modelo responda como “murn.” quando deveria interpretar Tanjiro, Shinobu ou outro personagem.
 
-A **extração estruturada de memórias** usa diretamente o Ollama do murn. em `http://127.0.0.1:11434`, com o modelo selecionado e JSON mode. Assim, a análise não passa pelas ferramentas ou pela memória pessoal do murn. Se o Ollama não estiver acessível ao RP creator, a resposta narrativa é salva com aviso, sem extrair novas memórias naquele turno.
+A **extração estruturada de memórias** continua usando diretamente o Ollama do murn. em `http://127.0.0.1:11434`, com o modelo selecionado e JSON mode. Assim, a análise não passa pelas ferramentas ou pela memória pessoal do murn. Se o Ollama não estiver acessível ao RP creator, a resposta narrativa é salva com aviso, sem extrair novas memórias naquele turno.
 
 ## Isolamento recomendado: Ollama do murn.
 
