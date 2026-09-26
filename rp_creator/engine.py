@@ -29,6 +29,22 @@ class Engine:
     def history(self,cid,npc,limit=50):
         return list(reversed(self.db.rows('SELECT * FROM turns WHERE campaign=? AND npc=? ORDER BY rowid DESC LIMIT ?',(cid,npc,limit))))
 
+    @staticmethod
+    def _role_confusion(response,npc_name,player_name,profile):
+        text=unicodedata.normalize('NFKD',str(response or ''))
+        text=''.join(ch for ch in text if not unicodedata.combining(ch)).casefold()
+        player=unicodedata.normalize('NFKD',str(player_name or ''))
+        player=''.join(ch for ch in player if not unicodedata.combining(ch)).casefold()
+        escaped=re.escape(player)
+        if player and re.search(rf'\b(?:eu\s+sou|me\s+chamo|meu\s+nome\s+e)\s+{escaped}\b',text):
+            return True
+        profile_norm=unicodedata.normalize('NFKD',str(profile or ''))
+        profile_norm=''.join(ch for ch in profile_norm if not unicodedata.combining(ch)).casefold()
+        is_corps_member=('cacador' in profile_norm or 'hashira' in profile_norm) and 'corporacao' in profile_norm
+        if is_corps_member and re.search(r'\b(?:eu\s+)?nao\s+sou\s+(?:da|de)\s+corporacao\b',text):
+            return True
+        return False
+
     def delete_turn(self,cid,tid):
         turn=self.db.one('SELECT * FROM turns WHERE campaign=? AND id=?',(cid,tid))
         if not turn:
@@ -170,7 +186,14 @@ class Engine:
                    'locations':locations,'relationship':json.loads(rel['values_json']) if rel else {},
                    'goals':goals}
             # Player private profile is not given to NPCs. Only witnessed memories are.
-            base_fixed=SYSTEM+'\nCANON\n'+dumps(canon)
+            identity_guard=(
+                f"\nIDENTIDADE FIXA PARA ESTA CENA\n"
+                f"NPC QUE VOCÊ INTERPRETA: {n['name']}\n"
+                f"JOGADOR: {c['player_name']}\n"
+                f"Você é {n['name']}. Nunca diga que é {c['player_name']} e nunca atribua a si "
+                f"mesmo falas, passado ou identidade do jogador.\n"
+            )
+            base_fixed=SYSTEM+identity_guard+'\nCANON\n'+dumps(canon)
             lore_npc={k:n[k] for k in ('id','name','profile','mood','location')}
             lore_npc['goals']=goals
             lore_budget=max(0,min(5200,ai.s.context_chars-len(base_fixed)-len(data.message)-3500))
@@ -205,6 +228,17 @@ class Engine:
                 warnings.append('Demonstração determinística: conecte o murn. para RP com IA.')
             else:
                 response=await ai.complete(messages)
+                if self._role_confusion(response,n['name'],c['player_name'],n['profile']):
+                    correction={
+                        'role':'system',
+                        'content':(
+                            f'CORREÇÃO DE PAPÉIS: você é exclusivamente {n["name"]}; '
+                            f'{c["player_name"]} é exclusivamente o jogador. '
+                            'A resposta anterior trocou identidades ou contradisse um fato básico do seu próprio perfil. '
+                            'Responda novamente à última mensagem sem mencionar esta correção, mantendo os fatos do CANON.'
+                        )
+                    }
+                    response=await ai.complete([messages[0],correction,*messages[1:]])
                 try: analysis=await ai.analyze(data.message,canon)
                 except AIError as exc:
                     analysis=Analysis(); warnings.append(str(exc))
