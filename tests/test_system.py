@@ -341,7 +341,7 @@ def test_role_confusion_triggers_clean_retry(env,monkeypatch):
     result=chat(e,cid,ns['Sara']['id'],'Você é Tanjiro Kamado?')
     assert result['response'].startswith('*Tanjiro')
     assert len(seen)==2
-    assert 'CORREÇÃO DE PAPÉIS' in seen[1][1]['content']
+    assert 'CORREÇÃO OBRIGATÓRIA DE CONTINUIDADE' in seen[1][1]['content']
 
 
 def test_analysis_normalizes_portuguese_json(monkeypatch):
