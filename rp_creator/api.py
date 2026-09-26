@@ -19,7 +19,7 @@ from pydantic import BaseModel,Field
 from .db import Database,uid,dumps
 from .engine import Engine
 from .ai import AIError
-from .models import AISettings,CampaignInput,LocationInput,NPCInput,ChatInput,MemoryInput,CharacterPromptInput,NPCWithMemoriesInput
+from .models import AISettings,CampaignInput,LocationInput,NPCInput,ChatInput,GroupChatInput,MemoryInput,CharacterPromptInput,NPCWithMemoriesInput
 from .memory import visible,decode,save_memory,invalidate_dependents
 from .world import event
 
@@ -203,6 +203,14 @@ def create_app(root=None,testing=False):
 
     @app.post('/api/campaigns/{cid}/chat')
     async def chat(cid:str,data:ChatInput): return await engine.chat(cid,data)
+
+    @app.post('/api/campaigns/{cid}/group-chat')
+    async def group_chat(cid:str,data:GroupChatInput):
+        return await engine.group_chat(cid,data)
+
+    @app.get('/api/campaigns/{cid}/group-history')
+    async def group_history(cid:str,limit:int=Query(50,ge=1,le=100)):
+        return engine.group_history(cid,limit)
 
     @app.get('/api/campaigns/{cid}/history/{nid}')
     async def history(cid:str,nid:str,limit:int=Query(50,ge=1,le=200)):
