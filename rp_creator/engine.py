@@ -405,9 +405,26 @@ class Engine:
                 f"mesmo falas, passado ou identidade do jogador.\n"
             )
             base_fixed=SYSTEM+identity_guard+'\nCANON\n'+dumps(canon)
+            scene_context=str(getattr(data,'scene_context','') or '').strip()
+            # Group scenes can accumulate several NPC replies quickly. Keep the
+            # authoritative NPC/campaign state and the player's current message,
+            # then trim only the oldest shared-scene context to fit.
+            reserve=2200
+            essential=len(base_fixed)+len(data.message)+reserve
+            if essential>ai.s.context_chars:
+                raise ValueError('Premissa, personagem e mensagem excedem o orçamento de contexto. Aumente o limite na conexão ou reduza esses textos.')
+            scene_cap=max(0,ai.s.context_chars-essential)
+            if len(scene_context)>scene_cap:
+                scene_context=scene_context[-scene_cap:] if scene_cap else ''
+                if scene_context:
+                    scene_context='[contexto anterior resumido por limite]\n'+scene_context
+
             lore_npc={k:n[k] for k in ('id','name','profile','mood','location')}
             lore_npc['goals']=goals
-            lore_budget=max(0,min(5200,ai.s.context_chars-len(base_fixed)-len(data.message)-3500))
+            lore_budget=max(0,min(
+                3600,
+                ai.s.context_chars-len(base_fixed)-len(data.message)-len(scene_context)-reserve
+            ))
             lore=select_lore(c,lore_npc,current_location,data.message,lore_budget)
             fixed=base_fixed
             if lore:
@@ -417,10 +434,7 @@ class Engine:
                     'O personagem só pode revelar fatos que seu perfil, CANON, MEMORIES ou histórico justifiquem. '
                     'Não entregue spoilers ou segredos como conhecimento pessoal sem essa justificativa.\n'+lore
                 )
-            scene_context=str(getattr(data,'scene_context','') or '').strip()
-            if len(fixed)+len(data.message)+len(scene_context)+300>ai.s.context_chars:
-                raise ValueError('Premissa, personagem, contexto da cena e mensagem excedem o orçamento de contexto. Aumente o limite na conexão ou reduza esses textos.')
-            remaining=max(1000,ai.s.context_chars-len(fixed)-len(data.message)-len(scene_context))
+            remaining=max(0,ai.s.context_chars-len(fixed)-len(data.message)-len(scene_context)-1200)
             selected=[]
             for m in memories:
                 entry={k:m[k] for k in ('id','kind','text','created')}
