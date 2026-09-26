@@ -354,11 +354,17 @@ class AIClient:
         payload = {'model': self.s.model, 'messages': messages, 'stream': False,
                    'temperature': 0.1 if structured else self.s.temperature}
         if self.s.provider == 'murn':
-            path = '/v1/chat'
-            instructions = '\n\n'.join(item['content'] for item in messages if item['role'] == 'system')
-            history = [item for item in messages[:-1] if item['role'] in ('user', 'assistant')]
-            payload = {'message': instructions + '\n\nMENSAGEM ATUAL DO JOGADOR:\n' + messages[-1]['content'],
-                       'history': history, 'source': 'rp-creator'}
+            # RP must not pass through murn.'s personal-agent identity, coding
+            # classifier, tools or personal memory. The dedicated endpoint sends
+            # these messages directly to murn.'s configured Ollama model.
+            path = '/v1/rp/chat'
+            payload = {
+                'messages': messages,
+                'temperature': payload.pop('temperature'),
+                'top_p': 0.9,
+                'num_predict': 900,
+                'source': 'rp-creator'
+            }
         elif self.s.provider == 'ollama':
             path = '/api/chat'
             payload['options'] = {'temperature': payload.pop('temperature')}
