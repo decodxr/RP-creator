@@ -5,7 +5,7 @@ import unicodedata
 from datetime import datetime,timedelta
 from .ai import AIClient,AIError,SYSTEM
 from .db import uid,dumps
-from .memory import MemoryEngine,save_memory
+from .memory import MemoryEngine,save_memory,invalidate_dependents
 from .lore import select_lore
 from .models import AISettings,Analysis,ExtractedMemory,Effect
 from .world import World,event,relationship
@@ -28,6 +28,31 @@ class Engine:
 
     def history(self,cid,npc,limit=50):
         return list(reversed(self.db.rows('SELECT * FROM turns WHERE campaign=? AND npc=? ORDER BY rowid DESC LIMIT ?',(cid,npc,limit))))
+
+    def delete_turn(self,cid,tid):
+        turn=self.db.one('SELECT * FROM turns WHERE campaign=? AND id=?',(cid,tid))
+        if not turn:
+            raise ValueError('Mensagem não encontrada.')
+        with self.db.connect() as db:
+            generated=[r['id'] for r in db.execute(
+                'SELECT id FROM memories WHERE campaign=? AND source=?',(cid,tid)
+            ).fetchall()]
+            for mid in generated:
+                invalidate_dependents(db,mid)
+            if generated:
+                marks=','.join('?' for _ in generated)
+                db.execute(f'DELETE FROM vault_files WHERE memory_id IN ({marks})',generated)
+                db.execute(f'DELETE FROM memories WHERE id IN ({marks})',generated)
+            db.execute('DELETE FROM promises WHERE campaign=? AND source=?',(cid,tid))
+            db.execute('DELETE FROM turns WHERE campaign=? AND id=?',(cid,tid))
+            db.execute('UPDATE campaigns SET version=version+1 WHERE id=?',(cid,))
+        self.vault.export(cid)
+        return {
+            'deleted':True,
+            'user':turn['user'],
+            'npc':turn['npc'],
+            'memories_removed':len(generated)
+        }
 
     @staticmethod
     def _label(value):
