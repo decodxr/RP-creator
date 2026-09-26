@@ -1,3 +1,4 @@
+import asyncio
 import json
 import math
 import re
@@ -83,8 +84,12 @@ class AIClient:
         elif self.s.provider == 'ollama':
             path = '/api/chat'
             payload['options'] = {'temperature': payload.pop('temperature')}
-            if structured and self.s.json_mode:
-                payload['format'] = 'json'
+            if structured:
+                # Structured helper calls must stay bounded. Without a token cap,
+                # some local models can keep elaborating JSON for many minutes.
+                payload['options']['num_predict'] = 1800
+                if self.s.json_mode:
+                    payload['format'] = 'json'
         elif self.s.provider == 'custom':
             path = self.s.chat_path
             payload[self.s.messages_field] = payload.pop('messages')
@@ -128,7 +133,16 @@ class AIClient:
         generator = AIClient(self.s.model_copy(update={
             'provider':'ollama', 'base_url':self.s.embedding_url, 'json_mode':True
         })) if self.s.provider == 'murn' else self
-        result = await generator.complete(messages, structured=True)
+        # A character draft should never leave the UI waiting forever. Use a real
+        # wall-clock deadline in addition to httpx's per-operation timeout.
+        deadline = min(180, max(45, self.s.timeout))
+        try:
+            result = await asyncio.wait_for(generator.complete(messages, structured=True), timeout=deadline)
+        except asyncio.TimeoutError as exc:
+            raise AIError(
+                f'A geração do personagem passou de {deadline} segundos e foi cancelada. '
+                'Confira se o Ollama está respondendo e tente novamente com um prompt menor.'
+            ) from exc
         try:
             return CharacterDraft.model_validate(parse_json(result))
         except (ValueError, TypeError) as exc:
