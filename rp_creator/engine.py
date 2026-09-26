@@ -30,7 +30,7 @@ class Engine:
         return list(reversed(self.db.rows('SELECT * FROM turns WHERE campaign=? AND npc=? ORDER BY rowid DESC LIMIT ?',(cid,npc,limit))))
 
     @staticmethod
-    def _role_confusion(response,npc_name,player_name,profile):
+    def _role_confusion(response,npc_name,player_name,profile,other_npc_names=None):
         text=unicodedata.normalize('NFKD',str(response or ''))
         text=''.join(ch for ch in text if not unicodedata.combining(ch)).casefold()
         player=unicodedata.normalize('NFKD',str(player_name or ''))
@@ -72,6 +72,21 @@ class Engine:
         if re.search(rf'(?:^|[.!?]\s+)voce\s+(?:se\s+)?(?:{verbs})\b',text):
             return True
 
+        current_norm=unicodedata.normalize('NFKD',str(npc_name or ''))
+        current_norm=''.join(ch for ch in current_norm if not unicodedata.combining(ch)).casefold()
+        current_parts={p for p in re.findall(r'[a-z0-9]+',current_norm) if len(p)>=3}
+        foreign_aliases=set()
+        for other in (other_npc_names or []):
+            other_norm=unicodedata.normalize('NFKD',str(other or ''))
+            other_norm=''.join(ch for ch in other_norm if not unicodedata.combining(ch)).casefold().strip()
+            if not other_norm or other_norm==current_norm:
+                continue
+            foreign_aliases.add(other_norm)
+            parts=[p for p in re.findall(r'[a-z0-9]+',other_norm) if len(p)>=4]
+            foreign_aliases.update(p for p in parts if p not in current_parts)
+        for alias in sorted(foreign_aliases,key=len,reverse=True):
+            if re.search(rf'\b{re.escape(alias)}\b[^.!?\n]{{0,35}}\b(?:{verbs})\b',text):
+                return True
         profile_norm=unicodedata.normalize('NFKD',str(profile or ''))
         profile_norm=''.join(ch for ch in profile_norm if not unicodedata.combining(ch)).casefold()
         is_corps_member=('cacador' in profile_norm or 'hashira' in profile_norm) and 'corporacao' in profile_norm
