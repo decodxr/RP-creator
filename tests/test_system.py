@@ -273,13 +273,12 @@ def test_real_murn_contract_and_ollama_extraction(env,monkeypatch):
     def handler(request):
         body=json.loads(request.content)
         calls.append((request.url.path,body))
-        if request.url.path=='/v1/chat':
+        if request.url.path=='/v1/rp/chat':
             assert body['source']=='rp-creator'
-            assert 'Sara' in body['message']
-            assert 'Eu gosto de chá.' in body['message']
-            assert body['history']==[]
-            assert 'session_id' not in body
-            return httpx.Response(200,json={'message':'*Sara sorri.* Vou me lembrar disso.','model':'llama3.1:8b','session_id':'new-private-session'})
+            assert body['messages'][0]['role']=='system'
+            assert 'Sara' in body['messages'][0]['content']
+            assert body['messages'][-1]['content']=='Eu gosto de chá.'
+            return httpx.Response(200,json={'message':'*Sara sorri.* Vou me lembrar disso.','model':'llama3.1:8b'})
         assert request.url.path=='/api/chat'
         assert body['format']=='json'
         assert body['messages'][0]['role']=='system'
@@ -290,4 +289,32 @@ def test_real_murn_contract_and_ollama_extraction(env,monkeypatch):
     monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handler),**kw))
     turn=chat(e,cid,ns['Sara']['id'],'Eu gosto de chá.')
     assert turn['new_memories']
-    assert [path for path,_ in calls]==['/v1/chat','/api/chat']
+    assert [path for path,_ in calls]==['/v1/rp/chat','/api/chat']
+
+
+def test_murn_rp_endpoint_falls_back_to_ollama_on_old_server(monkeypatch):
+    calls=[]
+    original=httpx.AsyncClient
+    def handler(request):
+        body=json.loads(request.content);calls.append(request.url.path)
+        if request.url.path=='/v1/rp/chat':
+            return httpx.Response(404,json={'detail':'Not Found'})
+        assert request.url.path=='/api/chat'
+        assert body['messages'][-1]['content']=='oi'
+        return httpx.Response(200,json={'message':{'content':'RP OK'}})
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handler),**kw))
+    ai=AIClient(AISettings(provider='murn'))
+    assert run(ai.complete([{'role':'system','content':'Interprete Tanjiro.'},{'role':'user','content':'oi'}]))=='RP OK'
+    assert calls==['/v1/rp/chat','/api/chat']
+
+
+def test_delete_turn_removes_transcript_and_direct_memories(env):
+    e,cid,ns=env
+    turn=chat(e,cid,ns['Sara']['id'],'Eu odeio café.')
+    tid=turn['id']
+    assert e.db.one('SELECT id FROM turns WHERE id=?',(tid,))
+    assert e.db.one('SELECT id FROM memories WHERE source=?',(tid,))
+    result=e.delete_turn(cid,tid)
+    assert result['deleted'] and result['user']=='Eu odeio café.'
+    assert not e.db.one('SELECT id FROM turns WHERE id=?',(tid,))
+    assert not e.db.one('SELECT id FROM memories WHERE source=?',(tid,))
