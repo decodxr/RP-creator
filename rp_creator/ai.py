@@ -385,9 +385,31 @@ class AIClient:
             if structured and self.s.json_mode:
                 payload['response_format'] = {'type': 'json_object'}
         headers = {'Authorization': f'Bearer {self.s.api_key}'} if self.s.api_key else {}
+        response_mode=self.s.provider
         try:
             async with httpx.AsyncClient(timeout=self.s.timeout, trust_env=False, follow_redirects=False) as client:
-                r = await client.post(self.s.base_url + path, json=payload, headers=headers)
+                try:
+                    r = await client.post(self.s.base_url + path, json=payload, headers=headers)
+                except httpx.ConnectError:
+                    # If murn. itself is not reachable but its Ollama is, keep RP
+                    # playable with the exact same isolated messages.
+                    if self.s.provider != 'murn':
+                        raise
+                    direct={
+                        'model':self.s.model,'messages':messages,'stream':False,
+                        'options':{'temperature':self.s.temperature,'num_predict':900}
+                    }
+                    r=await client.post(self.s.embedding_url + '/api/chat',json=direct)
+                    response_mode='ollama'
+                # Older murn. builds do not have /v1/rp/chat yet. Fall back to
+                # Ollama directly rather than blocking the scene with a 404/405.
+                if self.s.provider == 'murn' and r.status_code in (404,405):
+                    direct={
+                        'model':self.s.model,'messages':messages,'stream':False,
+                        'options':{'temperature':self.s.temperature,'num_predict':900}
+                    }
+                    r=await client.post(self.s.embedding_url + '/api/chat',json=direct)
+                    response_mode='ollama'
                 # Older Ollama builds reject a JSON-Schema object in "format" with
                 # HTTP 400. Retry automatically using legacy JSON mode instead of
                 # making the user change Ollama just to create a character.
@@ -397,9 +419,9 @@ class AIClient:
                     r = await client.post(self.s.base_url + path, json=fallback, headers=headers)
                 r.raise_for_status()
                 data = r.json()
-            if self.s.provider == 'murn':
+            if response_mode == 'murn':
                 result = data['message']
-            elif self.s.provider == 'ollama':
+            elif response_mode == 'ollama':
                 result = data['message']['content']
             elif self.s.provider == 'custom':
                 result = data
