@@ -415,6 +415,16 @@ def test_role_confusion_detects_player_as_narrative_subject():
     )
 
 
+def test_role_confusion_detects_switch_to_other_npc():
+    assert Engine._role_confusion(
+        '*Giyo Tomioka olha para você com uma expressão serena.*',
+        'Tanjiro Kamado',
+        'Kuren Matsumi',
+        'Tanjiro é Caçador de Demônios.',
+        ['Tanjiro Kamado','Giyu Tomioka','Shinobu Kocho']
+    )
+
+
 def test_player_narration_is_retried_before_save(env,monkeypatch):
     e,cid,ns=env
     e.db.set_setting('ai',AISettings().model_dump())
