@@ -166,39 +166,3 @@ class AISettings(Strict):
         if not value.startswith('/') or value.startswith('//') or '..' in value or '?' in value or '#' in value:
             raise ValueError('Informe somente um caminho absoluto local, como /api/chat.')
         return value
-)
-
-
-class AISettings(Strict):
-    provider: Literal['murn','openai','ollama','custom','demo'] = 'murn'
-    base_url: str = 'http://127.0.0.1:7331'
-    model: str = Field(default='llama3.1:8b', min_length=1, max_length=200)
-    chat_path: str = Field(default='/v1/chat', max_length=200)
-    messages_field: str = Field(default='messages', pattern=r'^[A-Za-z_][A-Za-z0-9_]*$')
-    response_path: str = Field(default='response', pattern=r'^[A-Za-z0-9_.]+$')
-    api_key: str = Field(default='', max_length=2000)
-    temperature: float = Field(default=0.7, ge=0, le=2)
-    timeout: int = Field(default=120, ge=5, le=600)
-    json_mode: bool = False
-    embeddings: bool = False
-    embedding_url: str = 'http://127.0.0.1:11434'
-    embedding_model: str = Field(default='embeddinggemma', min_length=1, max_length=200)
-    embedding_provider: Literal['ollama','openai'] = 'ollama'
-    context_chars: int = Field(default=18000, ge=4000, le=60000)
-    retrieval_limit: int = Field(default=12, ge=1, le=30)
-
-    @field_validator('base_url','embedding_url')
-    @classmethod
-    def local_endpoint(cls, value):
-        p = urlsplit(value)
-        # Local desktop tool: prevent configuring arbitrary public HTTP fetches.
-        if p.scheme not in ('http','https') or p.hostname not in ('localhost','127.0.0.1','::1','host.docker.internal') or p.username or p.password or p.query or p.fragment:
-            raise ValueError('Use uma URL local: localhost, 127.0.0.1 ou host.docker.internal.')
-        return value.rstrip('/')
-
-    @field_validator('chat_path')
-    @classmethod
-    def relative_path(cls, value):
-        if not value.startswith('/') or value.startswith('//') or '..' in value or '?' in value or '#' in value:
-            raise ValueError('Informe somente um caminho absoluto local, como /api/chat.')
-        return value
