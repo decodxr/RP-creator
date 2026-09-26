@@ -404,3 +404,35 @@ def test_continuity_retry_rewrites_bad_reply(env,monkeypatch):
     assert result['response'].startswith('*Tanjiro')
     assert len(seen)==2
     assert 'CORREÇÃO OBRIGATÓRIA DE CONTINUIDADE' in seen[1][1]['content']
+
+
+def test_role_confusion_detects_player_as_narrative_subject():
+    assert Engine._role_confusion(
+        'Kuren olha para você com um olhar sereno. Ele parece ansioso.',
+        'Tanjiro Kamado',
+        'Kuren Matsumi',
+        'Tanjiro é Caçador de Demônios.'
+    )
+
+
+def test_player_narration_is_retried_before_save(env,monkeypatch):
+    e,cid,ns=env
+    e.db.set_setting('ai',AISettings().model_dump())
+    with e.db.connect() as db:
+        db.execute('UPDATE campaigns SET player_name=? WHERE id=?',('Kuren Matsumi',cid))
+        db.execute('UPDATE npcs SET name=?,profile=? WHERE id=?',
+                   ('Tanjiro Kamado','Tanjiro é Caçador de Demônios e usa Respiração da Água.',ns['Sara']['id']))
+    replies=iter([
+        'Kuren olha para você com um olhar sereno e parece ansioso. — É melhor assim.',
+        '*Tanjiro mantém os olhos em Kuren, surpreso.* — Você nunca comeu um humano... e ainda consegue usar Respiração? Isso é diferente de tudo que eu já vi.'
+    ])
+    async def complete(self,messages,**kwargs): return next(replies)
+    async def analyze(*args,**kwargs): return Analysis()
+    monkeypatch.setattr(AIClient,'complete',complete)
+    monkeypatch.setattr(AIClient,'analyze',analyze)
+    result=chat(
+        e,cid,ns['Sara']['id'],
+        'Sim. Sou meio oni. Ainda consigo usar Respiração e nunca comi um humano.'
+    )
+    assert result['response'].startswith('*Tanjiro')
+    assert 'Kuren olha para você' not in result['response']
