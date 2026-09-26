@@ -47,12 +47,13 @@ Responda SOMENTE um objeto JSON, sem markdown e sem comentários, exatamente com
 
 REGRAS:
 - Preserve fielmente o briefing do usuário. Não substitua um personagem original por cânone.
+- PREENCHA TODOS OS CAMPOS. Nunca devolva goals, routine ou memories vazios quando o briefing permite inferi-los.
 - Use CONTEXTO_DA_CAMPANHA e REFERÊNCIA apenas para preencher lacunas e manter coerência.
 - Nunca invente um local que não esteja em LOCAIS_PERMITIDOS. Escolha o mais adequado entre eles.
-- Rotina usa horas inteiras de 0 a 23, no máximo uma atividade por hora.
-- Objetivos: no máximo 8, concretos e coerentes com o ponto atual da história.
-- Profile deve conter aparência, personalidade, forma de falar, capacidades relevantes, limites, passado e relações essenciais quando o briefing justificar.
-- Memories são SOMENTE conhecimentos/experiências que esse personagem realmente possui no ponto atual da campanha. Não dê spoilers futuros nem conhecimento onisciente.
+- Rotina usa horas inteiras de 0 a 23, no máximo uma atividade por hora. Gere normalmente 4 a 8 horários úteis.
+- Objetivos: gere normalmente 4 a 8 objetivos concretos e coerentes com o ponto atual da história.
+- Profile deve ser completo, normalmente entre 600 e 2500 caracteres, contendo aparência, personalidade, forma de falar, capacidades relevantes, limites, passado e relações essenciais.
+- Memories são SOMENTE conhecimentos/experiências que esse personagem realmente possui no ponto atual da campanha. Gere normalmente 6 a 14 memórias úteis. Não dê spoilers futuros nem conhecimento onisciente.
 - "semantic" significa Fato na interface. Use "secret" apenas para informação realmente secreta.
 - known_by aceita "self", "player", "*" para público, IDs ou nomes EXATOS de NPCs já existentes listados em PESSOAS_EXISTENTES.
 - Se alguém citado no briefing ainda não existir em PESSOAS_EXISTENTES, NÃO invente um ID; deixe essa memória apenas com "self" ou com quem já existe.
@@ -209,6 +210,140 @@ def normalize_character_payload(value):
     return {k:v for k,v in data.items() if k in allowed}
 
 
+def _routine_line(text):
+    parts=[x.strip() for x in str(text or '').split('|')]
+    hour=_first_int(parts[0]) if parts else None
+    if len(parts)<3 or hour is None or not 0<=hour<=23:
+        return None
+    return {'hour':hour,'location':parts[1],'activity':' | '.join(parts[2:]).strip()}
+
+
+def parse_structured_briefing(prompt):
+    """Recover explicit fields from the user's human-readable briefing.
+
+    This makes prompts like the ones used in the UI authoritative even when a
+    small local model summarizes them too aggressively.
+    """
+    scalar={'name':[],'profile':[],'location':[],'mood':[]}
+    goals=[]; routine=[]; memories=[]
+    section=None; current_memory=None
+    headings={
+        'nome':'name','name':'name',
+        'local_atual':'location','local':'location','location':'location',
+        'personalidade_e_historia':'profile','personalidade_historia':'profile',
+        'personalidade':'profile','perfil':'profile','profile':'profile',
+        'humor':'mood','mood':'mood',
+        'objetivos':'goals','goals':'goals',
+        'rotina':'routine','routine':'routine',
+        'memorias_iniciais':'memories','memorias':'memories','memories':'memories'
+    }
+    mem_fields={
+        'tipo':'kind','kind':'kind',
+        'importancia':'importance','importance':'importance',
+        'quem_sabe':'known_by','known_by':'known_by','audiencia':'known_by',
+        'texto':'text','text':'text','memoria':'text'
+    }
+
+    def finish_memory():
+        nonlocal current_memory
+        if current_memory and str(current_memory.get('text','')).strip():
+            memories.append(current_memory)
+        current_memory=None
+
+    for raw in str(prompt or '').splitlines():
+        line=raw.strip()
+        if not line:
+            continue
+
+        if ':' in line:
+            label,value=line.split(':',1)
+            key=_key(label)
+            value=value.strip()
+            top=headings.get(key)
+            if top:
+                if section=='memories':
+                    finish_memory()
+                section=top
+                if value:
+                    if top in scalar:
+                        scalar[top].append(value)
+                    elif top=='goals':
+                        goals.append(value.strip(' -•'))
+                    elif top=='routine':
+                        item=_routine_line(value)
+                        if item: routine.append(item)
+                continue
+
+            if section=='memories' and key in mem_fields:
+                field=mem_fields[key]
+                if field=='kind':
+                    finish_memory()
+                    current_memory={'kind':value or 'semantic','importance':7,'known_by':['self'],'text':''}
+                elif current_memory is None:
+                    current_memory={'kind':'semantic','importance':7,'known_by':['self'],'text':''}
+                if field=='importance':
+                    current_memory[field]=_first_int(value,7)
+                elif field=='known_by':
+                    current_memory[field]=[x.strip() for x in re.split(r'[,;+]',value) if x.strip()] or ['self']
+                elif field=='text':
+                    current_memory[field]=value
+                elif field=='kind':
+                    current_memory[field]=value or 'semantic'
+                continue
+
+        if section in scalar:
+            scalar[section].append(line)
+        elif section=='goals':
+            goals.append(line.strip(' -•'))
+        elif section=='routine':
+            item=_routine_line(line)
+            if item: routine.append(item)
+        elif section=='memories' and current_memory is not None:
+            if current_memory.get('text'):
+                current_memory['text']+=' '+line
+            else:
+                current_memory['text']=line
+
+    if section=='memories':
+        finish_memory()
+
+    raw={
+        'name':' '.join(scalar['name']).strip(),
+        'profile':'\n'.join(scalar['profile']).strip(),
+        'location':' '.join(scalar['location']).strip(),
+        'mood':' '.join(scalar['mood']).strip(),
+        'goals':[x for x in goals if x][:8],
+        'routine':routine[:24],
+        'memories':memories[:20]
+    }
+    return normalize_character_payload(raw)
+
+
+def merge_briefing_payload(payload,prompt):
+    data=dict(payload or {})
+    explicit=parse_structured_briefing(prompt)
+
+    # Explicit structured sections in the user's briefing are authoritative.
+    for key in ('name','location','mood'):
+        if explicit.get(key):
+            data[key]=explicit[key]
+    if explicit.get('profile') and len(explicit['profile']) >= len(str(data.get('profile',''))):
+        data['profile']=explicit['profile']
+    for key in ('goals','routine','memories'):
+        if explicit.get(key):
+            data[key]=explicit[key]
+    return data
+
+
+def incomplete_character(draft):
+    missing=[]
+    if len(draft.profile.strip()) < 180: missing.append('personalidade & história')
+    if not draft.goals: missing.append('objetivos')
+    if not draft.routine: missing.append('rotina')
+    if not draft.memories: missing.append('memórias')
+    return missing
+
+
 class AIClient:
     def __init__(self, settings: AISettings):
         self.s = settings
@@ -304,45 +439,55 @@ class AIClient:
                 'Confira se o Ollama está respondendo e tente novamente com um prompt menor.'
             ) from exc
         try:
-            payload=normalize_character_payload(parse_json(result))
-            return CharacterDraft.model_validate(payload)
-        except (ValueError, TypeError, json.JSONDecodeError) as first_exc:
-            # One compact repair pass handles common 8B-model issues such as
-            # localized keys, missing wrapper fields or malformed nested objects.
+            payload=merge_briefing_payload(normalize_character_payload(parse_json(result)),prompt)
+            draft=CharacterDraft.model_validate(payload)
+            missing=incomplete_character(draft)
+            if not missing:
+                return draft
+            first_exc=ValueError('Campos incompletos: '+', '.join(missing))
+            errors=[{'loc':[item],'msg':'campo ficou vazio ou resumido demais'} for item in missing]
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            first_exc=exc
             errors=[]
-            if hasattr(first_exc,'errors'):
+            if hasattr(exc,'errors'):
                 try:
-                    errors=[{'loc':list(e.get('loc',[])),'msg':e.get('msg','')} for e in first_exc.errors()[:8]]
+                    errors=[{'loc':list(e.get('loc',[])),'msg':e.get('msg','')} for e in exc.errors()[:8]]
                 except Exception:
                     errors=[]
-            repair_messages=[
-                {'role':'system','content':CHARACTER_BUILDER + '\nCORREÇÃO: devolva todos os campos obrigatórios e corrija somente a estrutura JSON.'},
-                {'role':'user','content':json.dumps({
-                    'BRIEFING_ORIGINAL':prompt,
-                    'RESPOSTA_ANTERIOR':result[:12000],
-                    'ERROS_DE_VALIDACAO':errors,
-                    'LOCAIS_PERMITIDOS':context.get('LOCAIS_PERMITIDOS',[]),
-                    'PESSOAS_EXISTENTES':context.get('PESSOAS_EXISTENTES',[])
-                },ensure_ascii=False)}
-            ]
-            try:
-                repaired=await asyncio.wait_for(
-                    generator.complete(repair_messages,structured=True,schema=CharacterDraft.model_json_schema()),
-                    timeout=min(75,deadline)
-                )
-                payload=normalize_character_payload(parse_json(repaired))
-                return CharacterDraft.model_validate(payload)
-            except Exception as repair_exc:
-                detail='; '.join(
-                    f"{'.'.join(map(str,e.get('loc',[]))) or 'campo'}: {e.get('msg','inválido')}"
-                    for e in errors[:4]
-                )
-                if not detail:
-                    detail=str(repair_exc).splitlines()[0][:300]
-                raise AIError(
-                    'A IA respondeu, mas não conseguiu fechar a ficha automaticamente. '
-                    f'Detalhe: {detail}'
-                ) from repair_exc
+
+        # One compact repair pass handles malformed or overly sparse 8B-model output.
+        repair_messages=[
+            {'role':'system','content':CHARACTER_BUILDER + '\nCORREÇÃO OBRIGATÓRIA: não resuma. Preencha profile, mood, goals, routine e memories por completo. Nunca use arrays vazios.'},
+            {'role':'user','content':json.dumps({
+                'BRIEFING_ORIGINAL':prompt,
+                'RESPOSTA_ANTERIOR':result[:12000],
+                'ERROS_OU_CAMPOS_FALTANTES':errors,
+                'LOCAIS_PERMITIDOS':context.get('LOCAIS_PERMITIDOS',[]),
+                'PESSOAS_EXISTENTES':context.get('PESSOAS_EXISTENTES',[])
+            },ensure_ascii=False)}
+        ]
+        try:
+            repaired=await asyncio.wait_for(
+                generator.complete(repair_messages,structured=True,schema=CharacterDraft.model_json_schema()),
+                timeout=min(75,deadline)
+            )
+            payload=merge_briefing_payload(normalize_character_payload(parse_json(repaired)),prompt)
+            draft=CharacterDraft.model_validate(payload)
+            missing=incomplete_character(draft)
+            if missing:
+                raise ValueError('Ainda faltaram: '+', '.join(missing))
+            return draft
+        except Exception as repair_exc:
+            detail='; '.join(
+                f"{'.'.join(map(str,e.get('loc',[]))) or 'campo'}: {e.get('msg','inválido')}"
+                for e in errors[:4]
+            )
+            if not detail:
+                detail=str(repair_exc).splitlines()[0][:300]
+            raise AIError(
+                'A IA respondeu, mas não conseguiu preencher a ficha inteira. '
+                f'Detalhe: {detail}'
+            ) from repair_exc
 
     async def analyze(self, text, canon):
         messages = [{'role':'system','content':ANALYZER},
